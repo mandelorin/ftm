@@ -125,6 +125,7 @@ func main() {
 		if err != nil {
 			fmt.Println("\033[01;31m[-] Error creating Tor dialer:", err)
 			os.Exit(1)
+            }
 		httpTransport := &http.Transport{
 			DialContext: dialer.(proxy.ContextDialer).DialContext,
 		}
