@@ -7,7 +7,7 @@ import (
 	"fmt"
 	"math/rand"
 	"net/http"
-	"net/url"
+	"net/url" // نام این پکیج 'url' است
 	"os"
 	"os/exec"
 	"os/signal"
@@ -25,29 +25,28 @@ var userAgents = []string{
 	"Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:126.0) Gecko/20100101 Firefox/126.0",
 }
 
-// تابع برای تنظیم هدرهای عمومی
 func setCommonHeaders(req *http.Request, originUrl string) {
 	req.Header.Set("User-Agent", userAgents[rand.Intn(len(userAgents))])
 	req.Header.Set("Accept", "*/*")
 	req.Header.Set("Accept-Language", "en-US,en;q=0.9")
-	req.Header.Set("Origin", originUrl) // هدر Origin بسیار مهم است
-	req.Header.Set("Referer", originUrl+"/") // هدر Referer هم مهم است
+	req.Header.Set("Origin", originUrl)
+	req.Header.Set("Referer", originUrl+"/")
 	req.Header.Set("Sec-Fetch-Dest", "empty")
 	req.Header.Set("Sec-Fetch-Mode", "cors")
 	req.Header.Set("Sec-Fetch-Site", "same-site")
 }
 
-
-func sendJSONRequest(client *http.Client, ctx context.Context, url string, payload map[string]interface{}, wg *sync.WaitGroup, ch chan<- int) {
+// اصلاح شده: نام متغیر از 'url' به 'urlString' تغییر کرد
+func sendJSONRequest(client *http.Client, ctx context.Context, urlString string, payload map[string]interface{}, wg *sync.WaitGroup, ch chan<- int) {
 	defer wg.Done()
-	if url == "" { ch <- -1; return }
+	if urlString == "" { ch <- -1; return }
 
 	jsonData, _ := json.Marshal(payload)
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewBuffer(jsonData))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, urlString, bytes.NewBuffer(jsonData))
 	if err != nil { ch <- -1; return }
-	
-	// بخش جدید: تنظیم هدرهای پیشرفته
-	parsedURL, _ := url.Parse(url)
+
+	// اصلاح شده: حالا 'url.Parse' به درستی به پکیج اشاره دارد
+	parsedURL, _ := url.Parse(urlString)
 	origin := parsedURL.Scheme + "://" + parsedURL.Host
 	setCommonHeaders(req, origin)
 	req.Header.Set("Content-Type", "application/json")
@@ -58,15 +57,16 @@ func sendJSONRequest(client *http.Client, ctx context.Context, url string, paylo
 	resp.Body.Close()
 }
 
-func sendFormRequest(client *http.Client, ctx context.Context, urlStr string, formData url.Values, wg *sync.WaitGroup, ch chan<- int) {
+// اصلاح شده: نام متغیر از 'urlStr' به 'urlString' تغییر کرد (برای یکپارچگی)
+func sendFormRequest(client *http.Client, ctx context.Context, urlString string, formData url.Values, wg *sync.WaitGroup, ch chan<- int) {
 	defer wg.Done()
-	if urlStr == "" { ch <- -1; return }
+	if urlString == "" { ch <- -1; return }
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, urlStr, strings.NewReader(formData.Encode()))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, urlString, strings.NewReader(formData.Encode()))
 	if err != nil { ch <- -1; return }
 
-	// بخش جدید: تنظیم هدرهای پیشرفته
-	parsedURL, _ := url.Parse(urlStr)
+	// اصلاح شده: حالا 'url.Parse' به درستی به پکیج اشاره دارد
+	parsedURL, _ := url.Parse(urlString)
 	origin := parsedURL.Scheme + "://" + parsedURL.Host
 	setCommonHeaders(req, origin)
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
@@ -77,8 +77,7 @@ func sendFormRequest(client *http.Client, ctx context.Context, urlStr string, fo
 	resp.Body.Close()
 }
 
-// ... بقیه توابع و تابع main مثل قبل هستند و نیازی به تغییر ندارند ...
-// (کد کامل main و توابع دیگر برای جلوگیری از تکرار حذف شده، اما ساختارشان همان است)
+// ... بقیه کد (clearScreen, parsePhoneNumber, main) دقیقاً مثل قبل است و نیازی به تغییر ندارد ...
 func clearScreen() {
 	cmd := exec.Command("clear")
 	if runtime.GOOS == "windows" {
