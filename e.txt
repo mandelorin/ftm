@@ -74,7 +74,7 @@ v
 w
 : 
 72
-================================================================================================================================================================================================================
+=======================================================================================================================
 1:
 Request URL
 https://euqs.shein.com/bff-api/user/geetest/v2/reset.php
@@ -156,20 +156,116 @@ true
 blackbox
 qWPE517499108369DyVYVRTEl9
 
-================================================================================================================================================================================================================
+=====================================================================================================================
+Request URL
+https://accounts.google.com/lifecycle/_/AccountLifecyclePlatformSignupUi/data/batchexecute?rpcids=rxubAb&source-path=%2Flifecycle%2Fsteps%2Fsignup%2Fstartmtsmsidv&f.sid=7442560276572421869&bl=boq_identity-account-creation-evolution-ui_20250611.05_p0&hl=en-US&TL=ALgCv6z-_W-jcsDfxqsd_nqLHRTXtTQMud2o-WL9nlAj0xpCTc2kMp_YXFwRaDeI&_reqid=1071181&rt=c
+Request Method
+POST
+Status Code
+200 OK
+Remote Address
+127.0.0.1:51384
+Referrer Policy
+origin
+
+rpcids
+rxubAb
+source-path
+/lifecycle/steps/signup/startmtsmsidv
+f.sid
+7442560276572421869
+bl
+boq_identity-account-creation-evolution-ui_20250611.05_p0
+hl
+en-US
+TL
+ALgCv6z-_W-jcsDfxqsd_nqLHRTXtTQMud2o-WL9nlAj0xpCTc2kMp_YXFwRaDeI
+_reqid
+1071181
+rt
+c
+f.req
+[[["rxubAb","[[[\"0484155542\",\"be\"],null,145,\"https://mail.google.com/mail/\",[\"https://mail.google.com/mail/\",\"mail\"]]]",null,"generic"]]]
+at
+AESbfg5ZMb17UADiPMKGMkFf4_Qe:1749917775627
+(empty)
+================================================================================================================
+email signup
+1:
+Request URL
+https://www.instagram.com/api/v1/web/accounts/check_email/
+Request Method
+POST
+Status Code
+200 OK
+Remote Address
+127.0.0.1:51384
+Referrer Policy
+strict-origin-when-cross-origin
 
 
+email
+gdhgidhgd@gmail.com
+jazoest
+21771
+
+2:
+Request URL
+https://www.instagram.com/api/v1/accounts/send_verify_email/
+Request Method
+POST
+Status Code
+200 OK
+Remote Address
+127.0.0.1:51384
+Referrer Policy
+strict-origin-when-cross-origin
 
 
+device_id
+xjrc26cvhsnepac5li1e39qls1efo4di73f8mitx8asy19mh1ws
+email
+gdhgidhgd@gmail.com
+jazoest
+21771
+==================================================================================================================
+phone signup
+1:
+Request URL
+https://www.instagram.com/api/v1/web/accounts/check_phone_number/
+Request Method
+POST
+Status Code
+200 OK
+Remote Address
+127.0.0.1:51384
+Referrer Policy
+strict-origin-when-cross-origin
 
+phone_number
++320484155542
+jazoest
+21771
 
+2:
+Request URL
+https://www.instagram.com/api/v1/web/accounts/send_signup_sms_code_ajax/
+Request Method
+POST
+Status Code
+200 OK
+Remote Address
+127.0.0.1:51384
+Referrer Policy
+strict-origin-when-cross-origin
 
-
-
-
-
-
-
+client_id
+xjrc26cvhsnepac5li1e39qls1efo4di73f8mitx8asy19mh1ws
+phone_number
++320484155542
+jazoest
+21771
+==========================================================================================================================
 
 
 
