@@ -160,7 +160,7 @@ func main() {
 	fmt.Print("Enter phone number with country code (e.g., +32484155542 or 989123456789): ")
 	fmt.Scanln(&phoneInput)
 	phone := sanitizePhone(phoneInput)
-	prefix, cc, local := detectCountryCode(phone)
+	_, cc, local := detectCountryCode(phone)
 	if cc == "" {
 		// fallback ask user
 		fmt.Print("Could not detect country code. Please enter 2-letter country code (e.g., be): ")
