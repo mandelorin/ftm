@@ -1,1 +1,168 @@
+1:
+Request URL
+https://europe-west1-truecaller-web.cloudfunctions.net/webapi/eu/auth/truecaller/v1/send-otp
+Request Method
+POST
+Status Code
+200 OK
+Remote Address
+127.0.0.1:51384
+Referrer Policy
+strict-origin-when-cross-origin
+
+{phone: 32484155542, countryCode: "be"}
+countryCode
+: 
+"be"
+phone
+: 
+32484155542
+
+
+2:
+Request URL
+https://www.truecaller.com/cms/z1m1hpbqstj98vij_phone-number-verification-login.json
+Request Method
+GET
+Status Code
+200 OK
+Remote Address
+127.0.0.1:51384
+Referrer Policy
+strict-origin-when-cross-origin
+
+{nm: "Main Scene", ddd: 0, h: 68, w: 72, meta: {g: "@lottiefiles/creator 1.34.2"}, layers: [,…],…}
+assets
+: 
+[]
+ddd
+: 
+0
+fr
+: 
+60
+h
+: 
+68
+ip
+: 
+0
+layers
+: 
+[,…]
+0
+: 
+{ty: 4, nm: "Group 19011", sr: 1, st: 0, op: 300, ip: 0, hd: false, ddd: 0, bm: 0, hasMask: false,…}
+1
+: 
+{ty: 4, nm: "notification", sr: 1, st: 0, op: 300, ip: 0, hd: false, ddd: 0, bm: 0, hasMask: false,…}
+2
+: 
+{ty: 4, nm: "phone", sr: 1, st: 0, op: 300, ip: 0, hd: false, ddd: 0, bm: 0, hasMask: false, ao: 0,…}
+meta
+: 
+{g: "@lottiefiles/creator 1.34.2"}
+nm
+: 
+"Main Scene"
+op
+: 
+300
+v
+: 
+"5.7.0"
+w
+: 
+72
+================================================================================================================================================================================================================
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
