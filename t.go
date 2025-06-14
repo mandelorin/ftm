@@ -250,5 +250,3 @@ func main() {
 
 	fmt.Println("Done. Check the above responses.")
 }
-	fmt.Println("Done. Check the above responses.")
-}
