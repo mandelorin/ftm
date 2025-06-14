@@ -275,12 +275,15 @@ func main() {
 	}()
 	
 	fmt.Println("\n[*] Starting attack... Press Ctrl+C to stop.")
+	successCount, failCount := 0, 0
 	for statusCode := range ch {
 		if statusCode >= 200 && statusCode < 300 {
 			fmt.Println("\033[01;32m[+] Request Succeeded")
-		} else if statusCode > 0 { // خطاهای HTTP
+			successCount++
+		} else if statusCode > 0 {
 			fmt.Printf("\033[01;31m[-] Request Failed with status: %d\n", statusCode)
+			failCount++
 		}
 	}
-	fmt.Println("\n\033[01;34m[*] Attack finished.\033[0m")
+	fmt.Printf("\n\033[01;34m[*] Attack finished. Success: %d, Failed/Canceled: %d\n\033[0m", successCount, failCount)
 }
