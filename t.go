@@ -267,13 +267,13 @@ func main() {
 		}
 	}
 
-	close(tasks)
+		close(tasks)
 
 	go func() {
 		wg.Wait()
 		close(ch)
 	}()
-	
+
 	fmt.Println("\n[*] Starting attack... Press Ctrl+C to stop.")
 	successCount, failCount := 0, 0
 	for statusCode := range ch {
