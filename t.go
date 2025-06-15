@@ -4,52 +4,110 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"io/ioutil"
+	"math/rand"
 	"net/http"
-	"os"
+	"net/url"
 	"strings"
+	"time"
 )
 
-func main() {
-	// گرفتن اطلاعات کاربر
-	var (
-		email, password, firstName, lastName, dob, securityA, captchaResp string
-	)
-	fmt.Print("Enter email: ")
-	fmt.Scanln(&email)
-	fmt.Print("Enter password: ")
-	fmt.Scanln(&password)
-	fmt.Print("Enter first name: ")
-	fmt.Scanln(&firstName)
-	fmt.Print("Enter last name: ")
-	fmt.Scanln(&lastName)
-	fmt.Print("Enter date of birth (yyyy-mm-dd): ")
-	fmt.Scanln(&dob)
-	fmt.Print("Enter security answer (مثلاً یک کلمه دلخواه): ")
-	fmt.Scanln(&securityA)
-	fmt.Print("Enter captcha token (از 2captcha): ")
-	fmt.Scanln(&captchaResp)
+// این مقدار رو با کلید 2captcha خودت جایگزین کن
+const captchaAPIKey = "YOUR_2CAPTCHA_API_KEY"
 
-	// مقداردهی پارامترهای ثابت
-	captchaSiteKey := "6LdWbTcaAAAAADFe7Vs6-1jfzSnprQwDWJ51aRep"
-	clientID := "37351a12-3e6a-4544-87ff-1eaea0846de2"
-	securityQ := "Where were you born?"
-	hashedTosPPVersion := "d3-7b2e7bfa9efbdd9371db8029cb263705"
+func randString(n int) string {
+	letters := []rune("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789")
+	s := make([]rune, n)
+	for i := range s {
+		s[i] = letters[rand.Intn(len(letters))]
+	}
+	return string(s)
+}
+
+func randDOB() string {
+	year := rand.Intn(2003-1985) + 1985
+	month := rand.Intn(12) + 1
+	day := rand.Intn(28) + 1
+	return fmt.Sprintf("%04d-%02d-%02d", year, month, day)
+}
+
+func getCaptchaToken(sitekey, pageurl string) (string, error) {
+	// مرحله ارسال درخواست حل کپچا
+	resp, err := http.PostForm(
+		"https://2captcha.com/in.php",
+		url.Values{
+			"key":      {captchaAPIKey},
+			"method":   {"userrecaptcha"},
+			"googlekey": {sitekey},
+			"pageurl":  {pageurl},
+			"json":     {"1"},
+		},
+	)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+	body, _ := ioutil.ReadAll(resp.Body)
+	var result map[string]interface{}
+	json.Unmarshal(body, &result)
+	if result["status"].(float64) != 1 {
+		return "", fmt.Errorf("2captcha error: %v", result["request"])
+	}
+	captchaID := result["request"].(string)
+
+	// مرحله گرفتن جواب کپچا (polling)
+	for i := 0; i < 24; i++ {
+		time.Sleep(5 * time.Second)
+		reqURL := fmt.Sprintf("https://2captcha.com/res.php?key=%s&action=get&id=%s&json=1", captchaAPIKey, captchaID)
+		res, err := http.Get(reqURL)
+		if err != nil {
+			return "", err
+		}
+		defer res.Body.Close()
+		body, _ := ioutil.ReadAll(res.Body)
+		var poll map[string]interface{}
+		json.Unmarshal(body, &poll)
+		if poll["status"].(float64) == 1 {
+			return poll["request"].(string), nil
+		}
+	}
+	return "", fmt.Errorf("Captcha not solved in time")
+}
+
+func main() {
+	rand.Seed(time.Now().UnixNano())
+	var email string
+
+	fmt.Print("Enter your email: ")
+	fmt.Scanln(&email)
+	email = strings.TrimSpace(email)
+
+	sitekey := "6LdWbTcaAAAAADFe7Vs6-1jfzSnprQwDWJ51aRep"
+	pageurl := "https://acm.account.sony.com/create_account/personal?client_id=37351a12-3e6a-4544-87ff-1eaea0846de2&scope=openid%20users&mode=signup"
+
+	fmt.Println("Solving captcha... please wait (may take up to 2 minutes)")
+	captchaResp, err := getCaptchaToken(sitekey, pageurl)
+	if err != nil {
+		fmt.Println("Captcha error:", err)
+		return
+	}
+	fmt.Println("Captcha solved!")
 
 	payload := map[string]interface{}{
-		"email":            strings.ReplaceAll(email, "%40", "@"),
-		"password":         password,
+		"email":            email,
+		"password":         randString(12),
 		"legalCountry":     "US",
 		"language":         "en-US",
-		"dateOfBirth":      dob,
-		"firstName":        firstName,
-		"lastName":         lastName,
-		"securityQuestion": securityQ,
-		"securityAnswer":   securityA,
+		"dateOfBirth":      randDOB(),
+		"firstName":        randString(7),
+		"lastName":         randString(7),
+		"securityQuestion": "Where were you born?",
+		"securityAnswer":   randString(6),
 		"captchaProvider":  "google:recaptcha-invisible",
-		"captchaSiteKey":   captchaSiteKey,
+		"captchaSiteKey":   sitekey,
 		"captchaResponse":  captchaResp,
-		"clientID":         clientID,
-		"hashedTosPPVersion": hashedTosPPVersion,
+		"clientID":         "37351a12-3e6a-4544-87ff-1eaea0846de2",
+		"hashedTosPPVersion": "d3-7b2e7bfa9efbdd9371db8029cb263705",
 		"tosPPVersion":     4,
 		"optIns":           []map[string]interface{}{{"opt_id": 57, "opted": false}},
 	}
@@ -57,7 +115,7 @@ func main() {
 	data, _ := json.Marshal(payload)
 	req, _ := http.NewRequest("POST", "https://acm.account.sony.com/api/accountInterimRegister", bytes.NewBuffer(data))
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36")
+	req.Header.Set("User-Agent", "Mozilla/5.0 (compatible; SonyBot/1.0)")
 
 	client := &http.Client{}
 	resp, err := client.Do(req)
@@ -70,18 +128,15 @@ func main() {
 	var result map[string]interface{}
 	json.NewDecoder(resp.Body).Decode(&result)
 
-	fmt.Println("----- Response from Sony -----")
-	out, _ := json.MarshalIndent(result, "", "  ")
-	fmt.Println(string(out))
+	fmt.Println("----- Registration Response -----")
+	prettyResult, _ := json.MarshalIndent(result, "", "  ")
+	fmt.Println(string(prettyResult))
 
-	// گرفتن verificationID برای مرحله بعد
 	if body, ok := result["body"].(map[string]interface{}); ok {
 		if resp, ok := body["response"].(map[string]interface{}); ok {
-			if verificationID, ok := resp["verificationID"].(string); ok {
-				fmt.Println("Your verificationID for next step (email verification):", verificationID)
-				os.Exit(0)
+			if verificationID, ok := resp["verificationID"].(string); ok && verificationID != "" {
+				fmt.Println("Your verificationID:", verificationID)
 			}
 		}
 	}
-	fmt.Println("No verificationID found. Something went wrong.")
 }
