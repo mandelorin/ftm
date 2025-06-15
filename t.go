@@ -13,7 +13,7 @@ import (
 )
 
 // این مقدار رو با کلید 2captcha خودت جایگزین کن
-const captchaAPIKey = "GUGrl5YkSwpBsxsF3eY665Ye"
+const captchaAPIKey = "c3f323409e795370d271dc9e46b7821f"
 
 func randString(n int) string {
 	letters := []rune("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789")
