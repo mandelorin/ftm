@@ -184,7 +184,13 @@ func main() {
 	req.Header.Set("Origin", "https://acm.account.sony.com")
 	req.Header.Set("Referer", pageurl)
 
-	client := &http.Client{Timeout: 30 * time.Second} // Add a timeout to prevent hanging.
+        tr := &http.Transport{
+        ForceAttemptHTTP2: false,
+         }
+        client := &http.Client{
+        Transport: tr,
+        Timeout:   30 * time.Second,
+         }
 	resp, err := client.Do(req)
 	if err != nil {
 		fmt.Println("Error sending registration request:", err)
