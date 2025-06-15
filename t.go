@@ -18,8 +18,9 @@ const (
 	pageurl = "https://acm.account.sony.com/create_account/personal?client_id=37351a12-3e6a-4544-87ff-1eaea0846de2&scope=openid%20users&mode=signup"
 )
 
+// randString generates a random string for use in names, etc.
 func randString(n int) string {
-	letters := []rune("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789")
+	letters := []rune("abcdefghijklmnopqrstuvwxyz")
 	s := make([]rune, n)
 	for i := range s {
 		s[i] = letters[rand.Intn(len(letters))]
@@ -27,6 +28,7 @@ func randString(n int) string {
 	return string(s)
 }
 
+// randDOB generates a random date of birth between 1985 and 2003.
 func randDOB() string {
 	year := rand.Intn(2003-1985) + 1985
 	month := rand.Intn(12) + 1
@@ -34,7 +36,7 @@ func randDOB() string {
 	return fmt.Sprintf("%04d-%02d-%02d", year, month, day)
 }
 
-// مرحله 1: درخواست حل کپچا از 2captcha و گرفتن captchaID
+// getCaptchaID: Step 1 - Request captcha solution from 2captcha and get captchaID.
 func getCaptchaID(captchaAPIKey string) (string, error) {
 	resp, err := http.PostForm(
 		"https://2captcha.com/in.php",
@@ -47,40 +49,64 @@ func getCaptchaID(captchaAPIKey string) (string, error) {
 		},
 	)
 	if err != nil {
-		return "", err
+		return "", fmt.Errorf("error sending initial request to 2captcha: %w", err)
 	}
 	defer resp.Body.Close()
-	body, _ := io.ReadAll(resp.Body)
-	var result map[string]interface{}
-	json.Unmarshal(body, &result)
-	if result["status"].(float64) != 1 {
-		return "", fmt.Errorf("2captcha error: %v", result["request"])
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return "", fmt.Errorf("error reading response from 2captcha: %w", err)
 	}
+
+	var result map[string]interface{}
+	if err := json.Unmarshal(body, &result); err != nil {
+		return "", fmt.Errorf("error parsing JSON response from 2captcha: %w", err)
+	}
+
+	// Check the status of the response from 2captcha.
+	if status, ok := result["status"].(float64); !ok || status != 1 {
+		return "", fmt.Errorf("2captcha service returned an error: %v", result["request"])
+	}
+
 	return result["request"].(string), nil
 }
 
-// مرحله 2: گرفتن توکن کپچا با poll کردن captchaID
+// pollForCaptchaToken: Step 2 - Get the captcha token by polling with the captchaID.
 func pollForCaptchaToken(captchaAPIKey, captchaID string) (string, error) {
+	// Wait for up to 2 minutes (24 attempts with a 5-second delay).
 	for i := 0; i < 24; i++ {
 		time.Sleep(5 * time.Second)
 		reqURL := fmt.Sprintf("https://2captcha.com/res.php?key=%s&action=get&id=%s&json=1", captchaAPIKey, captchaID)
 		res, err := http.Get(reqURL)
 		if err != nil {
-			return "", err
+			// If there's a network error, continue trying.
+			fmt.Printf("Network error while checking captcha status: %v. Retrying...\n", err)
+			continue
 		}
-		body, _ := io.ReadAll(res.Body)
+
+		body, err := io.ReadAll(res.Body)
+		if err != nil {
+			res.Body.Close()
+			return "", fmt.Errorf("error reading captcha status response: %w", err)
+		}
 		res.Body.Close()
+
 		var poll map[string]interface{}
-		json.Unmarshal(body, &poll)
-		if poll["status"].(float64) == 1 {
+		if err := json.Unmarshal(body, &poll); err != nil {
+			return "", fmt.Errorf("error parsing captcha status JSON response: %w", err)
+		}
+
+		if status, ok := poll["status"].(float64); ok && status == 1 {
+			// Captcha solved successfully.
 			return poll["request"].(string), nil
 		}
+		// If captcha is not ready, continue the loop.
 	}
-	return "", fmt.Errorf("Captcha not solved in time")
+	return "", fmt.Errorf("captcha was not solved in the specified time")
 }
 
 func main() {
-	rand.Seed(time.Now().UnixNano())
+	// As of Go 1.20, it's not necessary to call rand.Seed.
 
 	var email, captchaAPIKey string
 
@@ -88,71 +114,101 @@ func main() {
 	fmt.Scanln(&email)
 	email = strings.TrimSpace(email)
 
-	fmt.Print("Enter your captcha API key: ")
+	fmt.Print("Enter your 2captcha API key: ")
 	fmt.Scanln(&captchaAPIKey)
 	captchaAPIKey = strings.TrimSpace(captchaAPIKey)
 
 	fmt.Println("Solving captcha... please wait (may take up to 2 minutes)")
 	captchaID, err := getCaptchaID(captchaAPIKey)
 	if err != nil {
-		fmt.Println("Captcha error:", err)
+		fmt.Println("Error during captcha request phase:", err)
 		os.Exit(1)
 	}
-	fmt.Println("Captcha requested, ID:", captchaID)
+	fmt.Println("Captcha request sent successfully, ID:", captchaID)
 
 	captchaToken, err := pollForCaptchaToken(captchaAPIKey, captchaID)
 	if err != nil {
-		fmt.Println("Captcha polling error:", err)
+		fmt.Println("Error during captcha token retrieval phase:", err)
 		os.Exit(1)
 	}
 	fmt.Println("Captcha solved! Submitting registration request...")
 
+	// Payload structure for submitting to the Sony server, with all required fields.
 	payload := map[string]interface{}{
-		"email":              email,
-		"password":           randString(12),
-		"legalCountry":       "US",
-		"language":           "en-US",
-		"dateOfBirth":        randDOB(),
-		"firstName":          randString(7),
-		"lastName":           randString(7),
-		"securityQuestion":   "Where were you born?",
-		"securityAnswer":     randString(6),
-		"captchaProvider":    "google:recaptcha-invisible",
-		"captchaSiteKey":     sitekey,
-		"captchaResponse":    captchaToken,
-		"clientID":           "37351a12-3e6a-4544-87ff-1eaea0846de2",
-		"hashedTosPPVersion": "d3-7b2e7bfa9efbdd9371db8029cb263705",
-		"tosPPVersion":       4,
-		"optIns":             []map[string]interface{}{{"opt_id": 57, "opted": false}},
+		"email":                   email,
+		"password":                randString(10) + "aA1", // Stronger password to meet requirements.
+		"legalCountry":            "US",
+		"language":                "en-US",
+		"dateOfBirth":             randDOB(),
+		"firstName":               randString(7),
+		"lastName":                randString(7),
+		"securityQuestion":        "Where were you born?",
+		"securityAnswer":          randString(6),
+		"captchaProvider":         "google:recaptcha-invisible",
+		"captchaSiteKey":          sitekey,
+		"captchaResponse":         captchaToken,
+		"clientID":                "37351a12-3e6a-4544-87ff-1eaea0846de2",
+		"hashedTosPPVersion":      "d3-7b2e7bfa9efbdd9371db8029cb263705",
+		"tosPPVersion":            4,
+		"optIns":                  []map[string]interface{}{{"opt_id": 57, "opted": false}},
+
+		// New fields added based on network traffic analysis.
+		"address1":                "",
+		"address2":                "",
+		"address3":                "",
+		"city":                    "",
+		"state":                   "",
+		"postalCode":              "",
+		"captchaChallenge":        "",
+		"firstNamePhoneticValue":  "",
+		"familyNamePhoneticValue": "",
+		"formNumber":              nil, // nil in Go is marshaled to null in JSON.
 	}
 
-	data, _ := json.Marshal(payload)
-	req, _ := http.NewRequest("POST", "https://acm.account.sony.com/api/accountInterimRegister", bytes.NewBuffer(data))
+	data, err := json.Marshal(payload)
+	if err != nil {
+		fmt.Println("Error creating JSON payload:", err)
+		os.Exit(1)
+	}
+
+	req, err := http.NewRequest("POST", "https://acm.account.sony.com/api/accountInterimRegister", bytes.NewBuffer(data))
+	if err != nil {
+		fmt.Println("Error creating HTTP request:", err)
+		os.Exit(1)
+	}
+
+	// Set request headers to mimic a real browser.
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36")
 	req.Header.Set("Accept", "application/json, text/plain, */*")
 	req.Header.Set("Origin", "https://acm.account.sony.com")
 	req.Header.Set("Referer", pageurl)
-	req.Header.Set("Connection", "keep-alive")
-	req.Header.Set("Sec-Fetch-Site", "same-origin")
-	req.Header.Set("Sec-Fetch-Mode", "cors")
-	req.Header.Set("Sec-Fetch-Dest", "empty")
 
-	tr := &http.Transport{
-		ForceAttemptHTTP2: false,
-	}
-	client := &http.Client{Transport: tr}
+	client := &http.Client{Timeout: 30 * time.Second} // Add a timeout to prevent hanging.
 	resp, err := client.Do(req)
 	if err != nil {
-		fmt.Println("HTTP error:", err)
+		fmt.Println("Error sending registration request:", err)
 		return
 	}
 	defer resp.Body.Close()
 
-	var result map[string]interface{}
-	json.NewDecoder(resp.Body).Decode(&result)
+	fmt.Println("\n----- Sony Server Response -----")
+	fmt.Printf("Status Code: %d\n", resp.StatusCode)
 
-	fmt.Println("----- Registration Response -----")
-	prettyResult, _ := json.MarshalIndent(result, "", "  ")
+	var result map[string]interface{}
+	// Create a copy of the response body to read it twice if needed.
+	bodyBytes, _ := io.ReadAll(resp.Body)
+	if err := json.Unmarshal(bodyBytes, &result); err != nil {
+		fmt.Println("Received response was not in JSON format or could not be read.")
+		// If the response is not JSON, print it as plain text.
+		fmt.Println("Response body:", string(bodyBytes))
+		return
+	}
+
+	prettyResult, err := json.MarshalIndent(result, "", "  ")
+	if err != nil {
+		fmt.Println("Error pretty-printing JSON response:", err)
+		return
+	}
 	fmt.Println(string(prettyResult))
 }
