@@ -7,9 +7,9 @@ import (
 	"io"
 	"math/rand"
 	"net/http"
+	"net/http/cookiejar"
 	"net/url"
 	"os"
-	"net/http/cookiejar"
 	"strings"
 	"time"
 )
@@ -38,8 +38,9 @@ func randDOB() string {
 }
 
 // getCaptchaID: Step 1 - Request captcha solution from 2captcha and get captchaID.
-func getCaptchaID(captchaAPIKey string) (string, error) {
-	resp, err := http.PostForm(
+// This function now needs the shared http client to use the cookie jar.
+func getCaptchaID(client *http.Client, captchaAPIKey string) (string, error) {
+	resp, err := client.PostForm(
 		"https://2captcha.com/in.php",
 		url.Values{
 			"key":       {captchaAPIKey},
@@ -64,7 +65,6 @@ func getCaptchaID(captchaAPIKey string) (string, error) {
 		return "", fmt.Errorf("error parsing JSON response from 2captcha: %w", err)
 	}
 
-	// Check the status of the response from 2captcha.
 	if status, ok := result["status"].(float64); !ok || status != 1 {
 		return "", fmt.Errorf("2captcha service returned an error: %v", result["request"])
 	}
@@ -73,14 +73,13 @@ func getCaptchaID(captchaAPIKey string) (string, error) {
 }
 
 // pollForCaptchaToken: Step 2 - Get the captcha token by polling with the captchaID.
-func pollForCaptchaToken(captchaAPIKey, captchaID string) (string, error) {
-	// Wait for up to 2 minutes (24 attempts with a 5-second delay).
+// This function also needs the shared client.
+func pollForCaptchaToken(client *http.Client, captchaAPIKey, captchaID string) (string, error) {
 	for i := 0; i < 24; i++ {
 		time.Sleep(5 * time.Second)
 		reqURL := fmt.Sprintf("https://2captcha.com/res.php?key=%s&action=get&id=%s&json=1", captchaAPIKey, captchaID)
-		res, err := http.Get(reqURL)
+		res, err := client.Get(reqURL)
 		if err != nil {
-			// If there's a network error, continue trying.
 			fmt.Printf("Network error while checking captcha status: %v. Retrying...\n", err)
 			continue
 		}
@@ -98,16 +97,14 @@ func pollForCaptchaToken(captchaAPIKey, captchaID string) (string, error) {
 		}
 
 		if status, ok := poll["status"].(float64); ok && status == 1 {
-			// Captcha solved successfully.
 			return poll["request"].(string), nil
 		}
-		// If captcha is not ready, continue the loop.
 	}
 	return "", fmt.Errorf("captcha was not solved in the specified time")
 }
 
 func main() {
-// 1. Create a client with a cookie jar to manage cookies automatically.
+	// 1. Create a client with a cookie jar to manage cookies automatically.
 	jar, err := cookiejar.New(nil)
 	if err != nil {
 		fmt.Println("Error creating cookie jar:", err)
@@ -118,6 +115,7 @@ func main() {
 	tr := &http.Transport{
 		ForceAttemptHTTP2: false,
 	}
+	// This is the ONLY place the client is created.
 	client := &http.Client{
 		Transport: tr,
 		Jar:       jar, // Attach the cookie jar to the client
@@ -145,24 +143,25 @@ func main() {
 	captchaAPIKey = strings.TrimSpace(captchaAPIKey)
 
 	fmt.Println("Solving captcha... please wait (may take up to 2 minutes)")
-	captchaID, err := getCaptchaID(captchaAPIKey)
+	// Pass the shared client to the captcha functions
+	captchaID, err := getCaptchaID(client, captchaAPIKey)
 	if err != nil {
 		fmt.Println("Error during captcha request phase:", err)
 		os.Exit(1)
 	}
 	fmt.Println("Captcha request sent successfully, ID:", captchaID)
 
-	captchaToken, err := pollForCaptchaToken(captchaAPIKey, captchaID)
+	// Pass the shared client to the captcha functions
+	captchaToken, err := pollForCaptchaToken(client, captchaAPIKey, captchaID)
 	if err != nil {
 		fmt.Println("Error during captcha token retrieval phase:", err)
 		os.Exit(1)
 	}
 	fmt.Println("Captcha solved! Submitting registration request...")
 
-	// Payload structure for submitting to the Sony server, with all required fields.
 	payload := map[string]interface{}{
 		"email":                   email,
-		"password":                randString(10) + "aA1", // Stronger password to meet requirements.
+		"password":                randString(10) + "aA1",
 		"legalCountry":            "US",
 		"language":                "en-US",
 		"dateOfBirth":             randDOB(),
@@ -177,8 +176,6 @@ func main() {
 		"hashedTosPPVersion":      "d3-7b2e7bfa9efbdd9371db8029cb263705",
 		"tosPPVersion":            4,
 		"optIns":                  []map[string]interface{}{{"opt_id": 57, "opted": false}},
-
-		// New fields added based on network traffic analysis.
 		"address1":                "",
 		"address2":                "",
 		"address3":                "",
@@ -188,7 +185,7 @@ func main() {
 		"captchaChallenge":        "",
 		"firstNamePhoneticValue":  "",
 		"familyNamePhoneticValue": "",
-		"formNumber":              nil, // nil in Go is marshaled to null in JSON.
+		"formNumber":              nil,
 	}
 
 	data, err := json.Marshal(payload)
@@ -203,21 +200,14 @@ func main() {
 		os.Exit(1)
 	}
 
-	// Set request headers to mimic a real browser.
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36")
 	req.Header.Set("Accept", "application/json, text/plain, */*")
 	req.Header.Set("Origin", "https://acm.account.sony.com")
 	req.Header.Set("Referer", pageurl)
 
-	// Force HTTP/1.1 to avoid the server's HTTP/2 INTERNAL_ERROR
-	tr := &http.Transport{
-		ForceAttemptHTTP2: false,
-	}
-	client := &http.Client{
-		Transport: tr,
-		Timeout:   30 * time.Second,
-	}
+	// The second, duplicate client definition has been DELETED from here.
+	// We use the client that was defined at the top of main().
 	resp, err := client.Do(req)
 	if err != nil {
 		fmt.Println("Error sending registration request:", err)
@@ -229,11 +219,9 @@ func main() {
 	fmt.Printf("Status Code: %d\n", resp.StatusCode)
 
 	var result map[string]interface{}
-	// Create a copy of the response body to read it twice if needed.
 	bodyBytes, _ := io.ReadAll(resp.Body)
 	if err := json.Unmarshal(bodyBytes, &result); err != nil {
 		fmt.Println("Received response was not in JSON format or could not be read.")
-		// If the response is not JSON, print it as plain text.
 		fmt.Println("Response body:", string(bodyBytes))
 		return
 	}
