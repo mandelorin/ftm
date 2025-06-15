@@ -125,9 +125,16 @@ func main() {
 	}
 
 	data, _ := json.Marshal(payload)
-	req, _ := http.NewRequest("POST", "https://acm.account.sony.com/api/accountInterimRegister", bytes.NewBuffer(data))
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36")
+        req, _ := http.NewRequest("POST", "https://acm.account.sony.com/api/accountInterimRegister", bytes.NewBuffer(data))
+        req.Header.Set("Content-Type", "application/json")
+        req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36")
+        req.Header.Set("Accept", "application/json, text/plain, */*")
+        req.Header.Set("Origin", "https://acm.account.sony.com")
+        req.Header.Set("Referer", pageurl)
+        req.Header.Set("Connection", "keep-alive")
+        req.Header.Set("Sec-Fetch-Site", "same-origin")
+        req.Header.Set("Sec-Fetch-Mode", "cors")
+        req.Header.Set("Sec-Fetch-Dest", "empty")
 
 	tr := &http.Transport{
 		ForceAttemptHTTP2: false,
