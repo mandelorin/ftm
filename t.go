@@ -37,19 +37,23 @@ func randDOB() string {
 	return fmt.Sprintf("%04d-%02d-%02d", year, month, day)
 }
 
-// getCaptchaID: Step 1 - Request captcha solution from 2captcha and get captchaID.
-// This function now needs the shared http client to use the cookie jar.
+// getCaptchaID: Now uses the shared client to ensure cookies and settings are consistent.
 func getCaptchaID(client *http.Client, captchaAPIKey string) (string, error) {
-	resp, err := client.PostForm(
-		"https://2captcha.com/in.php",
-		url.Values{
-			"key":       {captchaAPIKey},
-			"method":    {"userrecaptcha"},
-			"googlekey": {sitekey},
-			"pageurl":   {pageurl},
-			"json":      {"1"},
-		},
-	)
+	// We can't use http.PostForm, so we build the request manually.
+	data := url.Values{
+		"key":       {captchaAPIKey},
+		"method":    {"userrecaptcha"},
+		"googlekey": {sitekey},
+		"pageurl":   {pageurl},
+		"json":      {"1"},
+	}
+	req, err := http.NewRequest("POST", "https://2captcha.com/in.php", strings.NewReader(data.Encode()))
+	if err != nil {
+		return "", fmt.Errorf("error creating 2captcha request: %w", err)
+	}
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+
+	resp, err := client.Do(req)
 	if err != nil {
 		return "", fmt.Errorf("error sending initial request to 2captcha: %w", err)
 	}
@@ -72,12 +76,13 @@ func getCaptchaID(client *http.Client, captchaAPIKey string) (string, error) {
 	return result["request"].(string), nil
 }
 
-// pollForCaptchaToken: Step 2 - Get the captcha token by polling with the captchaID.
-// This function also needs the shared client.
+// pollForCaptchaToken: Now uses the shared client.
 func pollForCaptchaToken(client *http.Client, captchaAPIKey, captchaID string) (string, error) {
 	for i := 0; i < 24; i++ {
 		time.Sleep(5 * time.Second)
 		reqURL := fmt.Sprintf("https://2captcha.com/res.php?key=%s&action=get&id=%s&json=1", captchaAPIKey, captchaID)
+		
+		// Using client.Get to ensure settings (like HTTP/1.1) are used.
 		res, err := client.Get(reqURL)
 		if err != nil {
 			fmt.Printf("Network error while checking captcha status: %v. Retrying...\n", err)
@@ -104,21 +109,20 @@ func pollForCaptchaToken(client *http.Client, captchaAPIKey, captchaID string) (
 }
 
 func main() {
-	// 1. Create a client with a cookie jar to manage cookies automatically.
+	// 1. Create a single, shared client for the entire application.
 	jar, err := cookiejar.New(nil)
 	if err != nil {
 		fmt.Println("Error creating cookie jar:", err)
 		os.Exit(1)
 	}
 
-	// Force HTTP/1.1 to avoid the server's HTTP/2 INTERNAL_ERROR
 	tr := &http.Transport{
-		ForceAttemptHTTP2: false,
+		ForceAttemptHTTP2: false, // Force HTTP/1.1 for all requests.
 	}
-	// This is the ONLY place the client is created.
+	
 	client := &http.Client{
 		Transport: tr,
-		Jar:       jar, // Attach the cookie jar to the client
+		Jar:       jar, // Attach the cookie jar for all requests.
 		Timeout:   30 * time.Second,
 	}
 
@@ -129,9 +133,10 @@ func main() {
 		fmt.Println("Error making initial request to get cookies:", err)
 		os.Exit(1)
 	}
-	initResp.Body.Close() // We don't need the body, just the cookies.
+	initResp.Body.Close()
 	fmt.Println("Session initialized successfully.")
 
+	// -- Get User Input --
 	var email, captchaAPIKey string
 
 	fmt.Print("Enter your email: ")
@@ -142,8 +147,8 @@ func main() {
 	fmt.Scanln(&captchaAPIKey)
 	captchaAPIKey = strings.TrimSpace(captchaAPIKey)
 
+	// -- Solve Captcha using the shared client --
 	fmt.Println("Solving captcha... please wait (may take up to 2 minutes)")
-	// Pass the shared client to the captcha functions
 	captchaID, err := getCaptchaID(client, captchaAPIKey)
 	if err != nil {
 		fmt.Println("Error during captcha request phase:", err)
@@ -151,7 +156,6 @@ func main() {
 	}
 	fmt.Println("Captcha request sent successfully, ID:", captchaID)
 
-	// Pass the shared client to the captcha functions
 	captchaToken, err := pollForCaptchaToken(client, captchaAPIKey, captchaID)
 	if err != nil {
 		fmt.Println("Error during captcha token retrieval phase:", err)
@@ -159,6 +163,7 @@ func main() {
 	}
 	fmt.Println("Captcha solved! Submitting registration request...")
 
+	// -- Prepare and Send Final Request --
 	payload := map[string]interface{}{
 		"email":                   email,
 		"password":                randString(10) + "aA1",
@@ -206,8 +211,6 @@ func main() {
 	req.Header.Set("Origin", "https://acm.account.sony.com")
 	req.Header.Set("Referer", pageurl)
 
-	// The second, duplicate client definition has been DELETED from here.
-	// We use the client that was defined at the top of main().
 	resp, err := client.Do(req)
 	if err != nil {
 		fmt.Println("Error sending registration request:", err)
