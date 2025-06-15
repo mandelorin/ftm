@@ -65,7 +65,7 @@ func getCaptchaID() (string, error) {
 // مرحله 2: گرفتن توکن کپچا با poll کردن captchaID
 func pollForCaptchaToken(captchaID string) (string, error) {
 	for i := 0; i < 24; i++ {
-		time.Sleep(5 * time.Second)
+		time.Sleep(90 * time.Second)
 		reqURL := fmt.Sprintf("https://2captcha.com/res.php?key=%s&action=get&id=%s&json=1", captchaAPIKey, captchaID)
 		res, err := http.Get(reqURL)
 		if err != nil {
