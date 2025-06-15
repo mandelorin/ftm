@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"crypto/tls" // <-- Import this package
 	"encoding/json"
 	"fmt"
 	"io"
@@ -39,7 +40,6 @@ func randDOB() string {
 
 // getCaptchaID: Now uses the shared client to ensure cookies and settings are consistent.
 func getCaptchaID(client *http.Client, captchaAPIKey string) (string, error) {
-	// We can't use http.PostForm, so we build the request manually.
 	data := url.Values{
 		"key":       {captchaAPIKey},
 		"method":    {"userrecaptcha"},
@@ -81,8 +81,7 @@ func pollForCaptchaToken(client *http.Client, captchaAPIKey, captchaID string) (
 	for i := 0; i < 24; i++ {
 		time.Sleep(5 * time.Second)
 		reqURL := fmt.Sprintf("https://2captcha.com/res.php?key=%s&action=get&id=%s&json=1", captchaAPIKey, captchaID)
-		
-		// Using client.Get to ensure settings (like HTTP/1.1) are used.
+
 		res, err := client.Get(reqURL)
 		if err != nil {
 			fmt.Printf("Network error while checking captcha status: %v. Retrying...\n", err)
@@ -116,13 +115,15 @@ func main() {
 		os.Exit(1)
 	}
 
+	// This transport forces HTTP/1.1 AND an older TLS version to maximize compatibility.
 	tr := &http.Transport{
-		ForceAttemptHTTP2: false, // Force HTTP/1.1 for all requests.
+		ForceAttemptHTTP2: false,
+		TLSClientConfig:   &tls.Config{MaxVersion: tls.VersionTLS12}, // <-- The new change
 	}
-	
+
 	client := &http.Client{
 		Transport: tr,
-		Jar:       jar, // Attach the cookie jar for all requests.
+		Jar:       jar,
 		Timeout:   30 * time.Second,
 	}
 
@@ -138,11 +139,9 @@ func main() {
 
 	// -- Get User Input --
 	var email, captchaAPIKey string
-
 	fmt.Print("Enter your email: ")
 	fmt.Scanln(&email)
 	email = strings.TrimSpace(email)
-
 	fmt.Print("Enter your 2captcha API key: ")
 	fmt.Scanln(&captchaAPIKey)
 	captchaAPIKey = strings.TrimSpace(captchaAPIKey)
