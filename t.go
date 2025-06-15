@@ -2,7 +2,7 @@ package main
 
 import (
 	"bytes"
-	"crypto/tls" // <-- Import this package
+	"crypto/tls" 
 	"encoding/json"
 	"fmt"
 	"io"
@@ -20,7 +20,6 @@ const (
 	pageurl = "https://acm.account.sony.com/create_account/personal?client_id=37351a12-3e6a-4544-87ff-1eaea0846de2&scope=openid%20users&mode=signup"
 )
 
-// randString generates a random string for use in names, etc.
 func randString(n int) string {
 	letters := []rune("abcdefghijklmnopqrstuvwxyz")
 	s := make([]rune, n)
@@ -30,7 +29,6 @@ func randString(n int) string {
 	return string(s)
 }
 
-// randDOB generates a random date of birth between 1985 and 2003.
 func randDOB() string {
 	year := rand.Intn(2003-1985) + 1985
 	month := rand.Intn(12) + 1
@@ -38,7 +36,6 @@ func randDOB() string {
 	return fmt.Sprintf("%04d-%02d-%02d", year, month, day)
 }
 
-// getCaptchaID: Now uses the shared client to ensure cookies and settings are consistent.
 func getCaptchaID(client *http.Client, captchaAPIKey string) (string, error) {
 	data := url.Values{
 		"key":       {captchaAPIKey},
@@ -76,10 +73,9 @@ func getCaptchaID(client *http.Client, captchaAPIKey string) (string, error) {
 	return result["request"].(string), nil
 }
 
-// pollForCaptchaToken: Now uses the shared client.
 func pollForCaptchaToken(client *http.Client, captchaAPIKey, captchaID string) (string, error) {
 	for i := 0; i < 24; i++ {
-		time.Sleep(5 * time.Second)
+		time.Sleep(30 * time.Second)
 		reqURL := fmt.Sprintf("https://2captcha.com/res.php?key=%s&action=get&id=%s&json=1", captchaAPIKey, captchaID)
 
 		res, err := client.Get(reqURL)
@@ -108,17 +104,16 @@ func pollForCaptchaToken(client *http.Client, captchaAPIKey, captchaID string) (
 }
 
 func main() {
-	// 1. Create a single, shared client for the entire application.
+
 	jar, err := cookiejar.New(nil)
 	if err != nil {
 		fmt.Println("Error creating cookie jar:", err)
 		os.Exit(1)
 	}
 
-	// This transport forces HTTP/1.1 AND an older TLS version to maximize compatibility.
 	tr := &http.Transport{
 		ForceAttemptHTTP2: false,
-		TLSClientConfig:   &tls.Config{MaxVersion: tls.VersionTLS12}, // <-- The new change
+		TLSClientConfig:   &tls.Config{MaxVersion: tls.VersionTLS12}, 
 	}
 
 	client := &http.Client{
@@ -127,7 +122,6 @@ func main() {
 		Timeout:   30 * time.Second,
 	}
 
-	// 2. Make an initial request to the page to get necessary cookies.
 	fmt.Println("Initializing session and getting cookies...")
 	initResp, err := client.Get(pageurl)
 	if err != nil {
@@ -137,7 +131,6 @@ func main() {
 	initResp.Body.Close()
 	fmt.Println("Session initialized successfully.")
 
-	// -- Get User Input --
 	var email, captchaAPIKey string
 	fmt.Print("Enter your email: ")
 	fmt.Scanln(&email)
@@ -146,7 +139,6 @@ func main() {
 	fmt.Scanln(&captchaAPIKey)
 	captchaAPIKey = strings.TrimSpace(captchaAPIKey)
 
-	// -- Solve Captcha using the shared client --
 	fmt.Println("Solving captcha... please wait (may take up to 2 minutes)")
 	captchaID, err := getCaptchaID(client, captchaAPIKey)
 	if err != nil {
@@ -162,7 +154,6 @@ func main() {
 	}
 	fmt.Println("Captcha solved! Submitting registration request...")
 
-	// -- Prepare and Send Final Request --
 	payload := map[string]interface{}{
 		"email":                   email,
 		"password":                randString(10) + "aA1",
