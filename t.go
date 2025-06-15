@@ -57,7 +57,7 @@ func getCaptchaToken(sitekey, pageurl string) (string, error) {
 	// گرفتن جواب کپچا (polling)
 	for i := 0; i < 24; i++ {
 		time.Sleep(5 * time.Second)
-		reqURL := fmt.Sprintf("https://2captcha.com/res.php?key=%s&action=get&id=%s&json=1", captchaAPIKey, captchaID)
+		reqURL := fmt.Sprintf("https://2captcha.com/res.php?key=1c800073c3a5c4fc84bd79762cb0e0b5&action=get&id=%s&json=1", captchaAPIKey, captchaID)
 		res, err := http.Get(reqURL)
 		if err != nil {
 			return "", err
