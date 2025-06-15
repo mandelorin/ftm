@@ -2,7 +2,6 @@ package main
 
 import (
 	"bufio"
-	"bytes"
 	"crypto/tls"
 	"encoding/json"
 	"fmt"
