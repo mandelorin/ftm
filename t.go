@@ -8,11 +8,18 @@ import (
 	"math/rand"
 	"net/http"
 	"net/url"
+	"os"
 	"strings"
 	"time"
 )
 
-const captchaAPIKey = "1c800073c3a5c4fc84bd79762cb0e0b5" // اینجا api key معتبر 2captcha را بگذارید
+const (
+	// کلید api key معتبر 2captcha خودت را اینجا بگذار
+	captchaAPIKey = "1c800073c3a5c4fc84bd79762cb0e0b5"
+
+	sitekey = "6LdWbTcaAAAAADFe7Vs6-1jfzSnprQwDWJ51aRep"
+	pageurl = "https://acm.account.sony.com/create_account/personal?client_id=37351a12-3e6a-4544-87ff-1eaea0846de2&scope=openid%20users&mode=signup"
+)
 
 func randString(n int) string {
 	letters := []rune("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789")
@@ -30,8 +37,8 @@ func randDOB() string {
 	return fmt.Sprintf("%04d-%02d-%02d", year, month, day)
 }
 
-func getCaptchaToken(sitekey, pageurl string) (string, error) {
-	// ارسال درخواست حل کپچا به 2captcha
+// مرحله 1: درخواست حل کپچا از 2captcha و گرفتن captchaID
+func getCaptchaID() (string, error) {
 	resp, err := http.PostForm(
 		"https://2captcha.com/in.php",
 		url.Values{
@@ -52,18 +59,20 @@ func getCaptchaToken(sitekey, pageurl string) (string, error) {
 	if result["status"].(float64) != 1 {
 		return "", fmt.Errorf("2captcha error: %v", result["request"])
 	}
-	captchaID := result["request"].(string)
+	return result["request"].(string), nil
+}
 
-	// گرفتن جواب کپچا (polling)
+// مرحله 2: گرفتن توکن کپچا با poll کردن captchaID
+func pollForCaptchaToken(captchaID string) (string, error) {
 	for i := 0; i < 24; i++ {
 		time.Sleep(5 * time.Second)
-		reqURL := fmt.Sprintf("https://2captcha.com/res.php?key=1c800073c3a5c4fc84bd79762cb0e0b5&action=get&id=%s&json=1", captchaAPIKey, captchaID)
+		reqURL := fmt.Sprintf("https://2captcha.com/res.php?key=%s&action=get&id=%s&json=1", captchaAPIKey, captchaID)
 		res, err := http.Get(reqURL)
 		if err != nil {
 			return "", err
 		}
-		defer res.Body.Close()
 		body, _ := io.ReadAll(res.Body)
+		res.Body.Close()
 		var poll map[string]interface{}
 		json.Unmarshal(body, &poll)
 		if poll["status"].(float64) == 1 {
@@ -81,16 +90,20 @@ func main() {
 	fmt.Scanln(&email)
 	email = strings.TrimSpace(email)
 
-	sitekey := "6LdWbTcaAAAAADFe7Vs6-1jfzSnprQwDWJ51aRep"
-	pageurl := "https://acm.account.sony.com/create_account/personal?client_id=37351a12-3e6a-4544-87ff-1eaea0846de2&scope=openid%20users&mode=signup"
-
 	fmt.Println("Solving captcha... please wait (may take up to 2 minutes)")
-	captchaResp, err := getCaptchaToken(sitekey, pageurl)
+	captchaID, err := getCaptchaID()
 	if err != nil {
 		fmt.Println("Captcha error:", err)
-		return
+		os.Exit(1)
 	}
-	fmt.Println("Captcha solved!")
+	fmt.Println("Captcha requested, ID:", captchaID)
+
+	captchaToken, err := pollForCaptchaToken(captchaID)
+	if err != nil {
+		fmt.Println("Captcha polling error:", err)
+		os.Exit(1)
+	}
+	fmt.Println("Captcha solved! Submitting registration request...")
 
 	payload := map[string]interface{}{
 		"email":              email,
@@ -104,7 +117,7 @@ func main() {
 		"securityAnswer":     randString(6),
 		"captchaProvider":    "google:recaptcha-invisible",
 		"captchaSiteKey":     sitekey,
-		"captchaResponse":    captchaResp,
+		"captchaResponse":    captchaToken,
 		"clientID":           "37351a12-3e6a-4544-87ff-1eaea0846de2",
 		"hashedTosPPVersion": "d3-7b2e7bfa9efbdd9371db8029cb263705",
 		"tosPPVersion":       4,
@@ -116,7 +129,6 @@ func main() {
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36")
 
-	// غیرفعال کردن HTTP/2 برای جلوگیری از خطای INTERNAL_ERROR
 	tr := &http.Transport{
 		ForceAttemptHTTP2: false,
 	}
@@ -134,12 +146,4 @@ func main() {
 	fmt.Println("----- Registration Response -----")
 	prettyResult, _ := json.MarshalIndent(result, "", "  ")
 	fmt.Println(string(prettyResult))
-
-	if body, ok := result["body"].(map[string]interface{}); ok {
-		if resp, ok := body["response"].(map[string]interface{}); ok {
-			if verificationID, ok := resp["verificationID"].(string); ok && verificationID != "" {
-				fmt.Println("Your verificationID:", verificationID)
-			}
-		}
-	}
 }
