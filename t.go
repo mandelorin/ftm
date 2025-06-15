@@ -15,7 +15,7 @@ import (
 
 const (
 	// کلید api key معتبر 2captcha خودت را اینجا بگذار
-	captchaAPIKey = "1c800073c3a5c4fc84bd79762cb0e0b5"
+	captchaAPIKey = "key"
 
 	sitekey = "6LdWbTcaAAAAADFe7Vs6-1jfzSnprQwDWJ51aRep"
 	pageurl = "https://acm.account.sony.com/create_account/personal?client_id=37351a12-3e6a-4544-87ff-1eaea0846de2&scope=openid%20users&mode=signup"
