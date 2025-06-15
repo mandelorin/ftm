@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"net/http/cookiejar"
 	"strings"
 	"time"
 )
@@ -106,7 +107,32 @@ func pollForCaptchaToken(captchaAPIKey, captchaID string) (string, error) {
 }
 
 func main() {
-	// As of Go 1.20, it's not necessary to call rand.Seed.
+// 1. Create a client with a cookie jar to manage cookies automatically.
+	jar, err := cookiejar.New(nil)
+	if err != nil {
+		fmt.Println("Error creating cookie jar:", err)
+		os.Exit(1)
+	}
+
+	// Force HTTP/1.1 to avoid the server's HTTP/2 INTERNAL_ERROR
+	tr := &http.Transport{
+		ForceAttemptHTTP2: false,
+	}
+	client := &http.Client{
+		Transport: tr,
+		Jar:       jar, // Attach the cookie jar to the client
+		Timeout:   30 * time.Second,
+	}
+
+	// 2. Make an initial request to the page to get necessary cookies.
+	fmt.Println("Initializing session and getting cookies...")
+	initResp, err := client.Get(pageurl)
+	if err != nil {
+		fmt.Println("Error making initial request to get cookies:", err)
+		os.Exit(1)
+	}
+	initResp.Body.Close() // We don't need the body, just the cookies.
+	fmt.Println("Session initialized successfully.")
 
 	var email, captchaAPIKey string
 
