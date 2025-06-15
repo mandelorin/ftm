@@ -14,9 +14,6 @@ import (
 )
 
 const (
-	// کلید api key معتبر 2captcha خودت را اینجا بگذار
-	captchaAPIKey = "key"
-
 	sitekey = "6LdWbTcaAAAAADFe7Vs6-1jfzSnprQwDWJ51aRep"
 	pageurl = "https://acm.account.sony.com/create_account/personal?client_id=37351a12-3e6a-4544-87ff-1eaea0846de2&scope=openid%20users&mode=signup"
 )
@@ -38,7 +35,7 @@ func randDOB() string {
 }
 
 // مرحله 1: درخواست حل کپچا از 2captcha و گرفتن captchaID
-func getCaptchaID() (string, error) {
+func getCaptchaID(captchaAPIKey string) (string, error) {
 	resp, err := http.PostForm(
 		"https://2captcha.com/in.php",
 		url.Values{
@@ -63,9 +60,9 @@ func getCaptchaID() (string, error) {
 }
 
 // مرحله 2: گرفتن توکن کپچا با poll کردن captchaID
-func pollForCaptchaToken(captchaID string) (string, error) {
+func pollForCaptchaToken(captchaAPIKey, captchaID string) (string, error) {
 	for i := 0; i < 24; i++ {
-		time.Sleep(90 * time.Second)
+		time.Sleep(5 * time.Second)
 		reqURL := fmt.Sprintf("https://2captcha.com/res.php?key=%s&action=get&id=%s&json=1", captchaAPIKey, captchaID)
 		res, err := http.Get(reqURL)
 		if err != nil {
@@ -84,21 +81,26 @@ func pollForCaptchaToken(captchaID string) (string, error) {
 
 func main() {
 	rand.Seed(time.Now().UnixNano())
-	var email string
+
+	var email, captchaAPIKey string
 
 	fmt.Print("Enter your email: ")
 	fmt.Scanln(&email)
 	email = strings.TrimSpace(email)
 
+	fmt.Print("Enter your captcha API key: ")
+	fmt.Scanln(&captchaAPIKey)
+	captchaAPIKey = strings.TrimSpace(captchaAPIKey)
+
 	fmt.Println("Solving captcha... please wait (may take up to 2 minutes)")
-	captchaID, err := getCaptchaID()
+	captchaID, err := getCaptchaID(captchaAPIKey)
 	if err != nil {
 		fmt.Println("Captcha error:", err)
 		os.Exit(1)
 	}
 	fmt.Println("Captcha requested, ID:", captchaID)
 
-	captchaToken, err := pollForCaptchaToken(captchaID)
+	captchaToken, err := pollForCaptchaToken(captchaAPIKey, captchaID)
 	if err != nil {
 		fmt.Println("Captcha polling error:", err)
 		os.Exit(1)
@@ -125,16 +127,16 @@ func main() {
 	}
 
 	data, _ := json.Marshal(payload)
-        req, _ := http.NewRequest("POST", "https://acm.account.sony.com/api/accountInterimRegister", bytes.NewBuffer(data))
-        req.Header.Set("Content-Type", "application/json")
-        req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36")
-        req.Header.Set("Accept", "application/json, text/plain, */*")
-        req.Header.Set("Origin", "https://acm.account.sony.com")
-        req.Header.Set("Referer", pageurl)
-        req.Header.Set("Connection", "keep-alive")
-        req.Header.Set("Sec-Fetch-Site", "same-origin")
-        req.Header.Set("Sec-Fetch-Mode", "cors")
-        req.Header.Set("Sec-Fetch-Dest", "empty")
+	req, _ := http.NewRequest("POST", "https://acm.account.sony.com/api/accountInterimRegister", bytes.NewBuffer(data))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36")
+	req.Header.Set("Accept", "application/json, text/plain, */*")
+	req.Header.Set("Origin", "https://acm.account.sony.com")
+	req.Header.Set("Referer", pageurl)
+	req.Header.Set("Connection", "keep-alive")
+	req.Header.Set("Sec-Fetch-Site", "same-origin")
+	req.Header.Set("Sec-Fetch-Mode", "cors")
+	req.Header.Set("Sec-Fetch-Dest", "empty")
 
 	tr := &http.Transport{
 		ForceAttemptHTTP2: false,
