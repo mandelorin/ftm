@@ -10,7 +10,6 @@ import (
 	"math/rand"
 	"net/http"
 	"net/http/cookiejar"
-	"net/url"
 	"os"
 	"regexp"
 	"strconv"
